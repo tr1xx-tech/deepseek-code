@@ -479,7 +479,7 @@ def _login_terminal(cfg: dict) -> tuple[str, dict, str]:
     print("  2. Get your token using one of:")
     print()
     print(f"  {c(CYAN,'Android Chrome / Kiwi Browser')} — type in address bar:")
-    js_alert = "javascript:alert(JSON.parse(localStorage.getItem('userToken')).value+'|||'+document.cookie)"
+    js_alert = "javascript:prompt('Copy token:',JSON.parse(localStorage.getItem('userToken')).value+'|||'+document.cookie)"
     print(f"    {c(YELLOW, js_alert)}")
     print()
     print(f"  {c(CYAN,'Firefox / any DevTools console')}:")
