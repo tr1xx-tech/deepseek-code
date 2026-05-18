@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
 deepseek.py — DeepSeek Code Agent
-
-Usage: deepseek
-              → browser opens, you log in, done.
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
 # stdlib
 # ─────────────────────────────────────────────────────────────────────────────
-import os, sys, json, re, base64, html, time, threading, webbrowser, shutil
+import os, sys, json, re, base64, html, time, threading, webbrowser, shutil, signal
 import subprocess, traceback, urllib.request, urllib.parse
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -20,13 +17,12 @@ from typing import Generator
 # ─────────────────────────────────────────────────────────────────────────────
 R, BOLD, DIM, ITALIC = "\033[0m", "\033[1m", "\033[2m", "\033[3m"
 CYAN, GREEN, YELLOW, RED, BLUE = "\033[36m", "\033[32m", "\033[33m", "\033[31m", "\033[34m"
-BCYAN = "\033[96m"   # bright cyan
-BBLUE = "\033[94m"   # bright blue
-DBLUE = "\033[38;5;27m"  # deep blue
+BCYAN = "\033[96m"
+BBLUE = "\033[94m"
+DBLUE = "\033[38;5;27m"
 def c(col, t): return f"{col}{t}{R}"
 def bold(t):   return c(BOLD, t)
 def dim(t):    return c(DIM, t)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENVIRONMENT DETECTION
@@ -47,13 +43,14 @@ DATA_DIR    = Path.home() / ".deepseek"
 CONFIG_FILE = DATA_DIR / "config.json"
 COOKIE_FILE = DATA_DIR / "cookies.json"
 WASM_FILE   = DATA_DIR / "sha3.wasm"
+CHATS_FILE  = DATA_DIR / "chats.json"
 
 WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION     = "1.0.6"
-_RAW_BASE   = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
+VERSION   = "1.0.8"
+_RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
 
@@ -76,7 +73,7 @@ def _check_update():
 
 DEFAULTS = dict(
     auth_token   = "",
-    model        = "flash",    # "flash" | "pro" | "r1"
+    model        = "flash",
     thinking     = False,
     search       = True,
     confirm_bash = True,
@@ -95,7 +92,7 @@ def save_cfg(cfg: dict):
     DATA_DIR.mkdir(exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
-def load_cookies() -> tuple[dict, str]:
+def load_cookies() -> tuple:
     ua = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
     if COOKIE_FILE.exists():
@@ -108,6 +105,26 @@ def load_cookies() -> tuple[dict, str]:
 def save_cookies(cookies: dict, ua: str):
     COOKIE_FILE.write_text(json.dumps({"cookies": cookies, "user_agent": ua}, indent=2))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL CHAT TRACKING
+# ─────────────────────────────────────────────────────────────────────────────
+def _load_local_chats() -> list:
+    try: return json.loads(CHATS_FILE.read_text()) if CHATS_FILE.exists() else []
+    except: return []
+
+def _save_local_chats(chats: list):
+    try: CHATS_FILE.write_text(json.dumps(chats, indent=2))
+    except: pass
+
+def _track_chat(chat_id: str, title: str, model: str):
+    chats = _load_local_chats()
+    chats = [ch for ch in chats if ch.get("id") != chat_id]
+    chats.insert(0, {"id": chat_id, "title": title[:60], "model": model, "ts": int(time.time())})
+    _save_local_chats(chats[:100])
+
+def _remove_local_chat(chat_id: str):
+    chats = _load_local_chats()
+    _save_local_chats([ch for ch in chats if ch.get("id") != chat_id])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE.JS POW SOLVER (fallback when wasmtime is unavailable — e.g. Termux)
@@ -153,7 +170,6 @@ WebAssembly.instantiate(wasm, {
 # POW SOLVER
 # ─────────────────────────────────────────────────────────────────────────────
 def ensure_wasm():
-    """Download WASM binary."""
     if WASM_FILE.exists():
         return
     print(f"  {dim('Downloading POW solver (~25 KB)...')}", end="", flush=True)
@@ -167,7 +183,6 @@ def ensure_wasm():
 class _POWSolver:
     def __init__(self):
         self._mode = None
-        # Try wasmtime first
         try:
             import wasmtime
             import numpy as _np
@@ -185,14 +200,12 @@ class _POWSolver:
             pass
         except Exception:
             pass
-        # Fallback: Node.js (available on Termux via pkg install nodejs)
         for cmd in ("node", "nodejs"):
             try:
                 r = subprocess.run([cmd, "--version"], capture_output=True, timeout=3)
                 if r.returncode == 0:
                     self._node = cmd
                     self._mode = "node"
-                    # Write the JS solver once
                     js = DATA_DIR / "pow_solver.js"
                     if not js.exists():
                         js.write_text(_NODE_POW_JS)
@@ -264,11 +277,9 @@ class DeepSeekClient:
         self.token   = auth_token
         self._pow    = _POWSolver()
         self._cookies, self._ua = load_cookies()
-        # Android gets a native Android Chrome profile; desktop uses regular Chrome
         profile      = "chrome131_android" if IS_ANDROID else "chrome131"
         self._sess   = self._req.Session(impersonate=profile)
 
-    # ── internal ──────────────────────────────────────────────────────────────
     def _headers(self, pow_resp: str = None) -> dict:
         h = {
             "Authorization":   f"Bearer {self.token}",
@@ -299,19 +310,55 @@ class DeepSeekClient:
         r.raise_for_status()
         return r
 
+    def _get(self, path: str, params: dict = None):
+        try:
+            return self._sess.get(
+                f"{API_BASE}{path}",
+                headers = self._headers(),
+                cookies = self._cookies,
+                params  = params or {},
+                timeout = 10,
+            )
+        except Exception:
+            return None
+
+    def _delete(self, path: str):
+        try:
+            return self._sess.delete(
+                f"{API_BASE}{path}",
+                headers = self._headers(),
+                cookies = self._cookies,
+                timeout = 10,
+            )
+        except Exception:
+            return None
+
     def _pow_response(self) -> str:
         r   = self._post("/chat/create_pow_challenge",
                          {"target_path": "/api/v0/chat/completion"})
         cfg = r.json()["data"]["biz_data"]
         return self._pow.solve(cfg)
 
-    # ── public ────────────────────────────────────────────────────────────────
     def create_session(self) -> str:
         r = self._post("/chat_session/create", {"character_id": None})
         try:
             return r.json()["data"]["biz_data"]["id"]
         except (KeyError, TypeError):
             raise AuthError("invalid token")
+
+    def list_chats(self) -> list:
+        r = self._get("/chat_sessions", {"count": 50, "page": 0})
+        if r is None:
+            return []
+        try:
+            d = r.json().get("data", {}).get("biz_data", {})
+            return d.get("chat_sessions", d.get("sessions", [])) or []
+        except Exception:
+            return []
+
+    def delete_chat(self, chat_id: str) -> bool:
+        r = self._delete(f"/chat_session/{chat_id}")
+        return r is not None and r.status_code < 300
 
     def stream(self, chat_id: str, prompt: str,
                parent_id=None, thinking=False, search=False) -> Generator:
@@ -446,7 +493,6 @@ async function connect(){
   const btn = document.getElementById('btn');
   if(!raw){ st.textContent='Paste your credentials first.'; st.className='status err'; return; }
 
-  // Accept either raw JSON {"t":...,"c":...} or plain token string
   let payload;
   try { payload = JSON.parse(raw); }
   catch { payload = { t: raw }; }
@@ -471,7 +517,6 @@ async function connect(){
   }
 }
 
-// Auto-open DeepSeek
 window.open('https://chat.deepseek.com','_blank');
 document.getElementById('inp').addEventListener('keydown', e=>{ if(e.key==='Enter') connect(); });
 </script>
@@ -479,8 +524,7 @@ document.getElementById('inp').addEventListener('keydown', e=>{ if(e.key==='Ente
 </html>"""
 
 
-def _login_terminal(cfg: dict) -> tuple[str, dict, str]:
-    """Login for Termux / headless environments — no browser server needed."""
+def _login_terminal(cfg: dict) -> tuple:
     print(f"\n{bold('DeepSeek Login')} {dim('(terminal mode)')}")
     print()
     print("  1. Open  https://chat.deepseek.com  in your browser and log in")
@@ -496,25 +540,24 @@ def _login_terminal(cfg: dict) -> tuple[str, dict, str]:
     print(f"    {c(YELLOW, js_copy)}")
     print()
     print("  3. Paste the result below.")
-    print(f"     {dim('Accepts: plain token  OR  {"t":"...","c":"cf_clearance=..."}')} ")
+    print(f"     {dim('Accepts: plain token  OR  {\"t\":\"...\",\"c\":\"cf_clearance=...\"}')} ")
     print()
 
     raw = input("  Paste here: ").strip()
     if not raw:
         raise ValueError("Nothing pasted")
 
-    # Parse: plain token string OR JSON blob {"t":..., "c":...}
     token, cookies_str = raw, ""
     if raw.startswith("{"):
         try:
             d = json.loads(raw)
-            token      = d.get("t") or d.get("token") or raw
+            token       = d.get("t") or d.get("token") or raw
             cookies_str = d.get("c") or d.get("cookies") or ""
         except json.JSONDecodeError:
             pass
     elif "|||" in raw:
-        parts  = raw.split("|||", 1)
-        token  = parts[0].strip()
+        parts       = raw.split("|||", 1)
+        token       = parts[0].strip()
         cookies_str = parts[1].strip() if len(parts) > 1 else ""
 
     cookies = {}
@@ -532,9 +575,8 @@ def _login_terminal(cfg: dict) -> tuple[str, dict, str]:
     return token.strip(), cookies, ua
 
 
-def _login_via_html(cfg: dict) -> tuple[str, dict, str]:
-    """Fallback login: local HTML page + system browser."""
-    result = [None]  # [token, cookies_dict, ua]
+def _login_via_html(cfg: dict) -> tuple:
+    result = [None]
     PORT   = 51423
 
     class H(BaseHTTPRequestHandler):
@@ -558,7 +600,6 @@ def _login_via_html(cfg: dict) -> tuple[str, dict, str]:
             ua     = data.get("ua", "")
 
             if token:
-                # Parse cookie string  "name=val; name2=val2"
                 cookies = {}
                 for part in cookies_str.split(";"):
                     part = part.strip()
@@ -596,25 +637,24 @@ def _login_via_html(cfg: dict) -> tuple[str, dict, str]:
         time.sleep(0.3)
 
     srv.shutdown()
-    return result[0]  # (token, cookies, ua)
+    return result[0]
 
 
-async def _login_via_nodriver() -> tuple[str, dict, str]:
-    """Preferred login: automated Chrome via nodriver, user just logs in normally."""
+async def _login_via_nodriver() -> tuple:
     import nodriver as uc
 
     print(f"\n{bold('DeepSeek Login')} {dim('(automated browser)')}")
     print(f"  {dim('A browser window will open — log in normally, then wait.')}")
 
     browser = await uc.start(
-        headless        = False,
-        browser_args    = ["--window-size=1100,780", "--window-position=100,80"],
+        headless     = False,
+        browser_args = ["--window-size=1100,780", "--window-position=100,80"],
     )
     page = await browser.get("https://chat.deepseek.com")
 
     print(f"  {dim('Waiting for login…')} ", end="", flush=True)
     token = None
-    for _ in range(600):  # 10-minute timeout
+    for _ in range(600):
         await page.sleep(1)
         try:
             token = await page.evaluate(
@@ -630,7 +670,6 @@ async def _login_via_nodriver() -> tuple[str, dict, str]:
         browser.stop()
         raise TimeoutError("Login timed out (10 min)")
 
-    # Grab cookies — cf_clearance is NOT httpOnly so document.cookie works
     cookie_str = await page.evaluate("document.cookie")
     ua         = await page.evaluate("navigator.userAgent")
     browser.stop()
@@ -643,7 +682,6 @@ async def _login_via_nodriver() -> tuple[str, dict, str]:
             cookies[k.strip()] = v.strip()
 
     return token, cookies, ua
-
 
 
 def _has_display() -> bool:
@@ -907,7 +945,7 @@ Platform: {platform}
 
 _TOOL_RE = re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', re.DOTALL)
 
-def parse_calls(text: str) -> list[dict]:
+def parse_calls(text: str) -> list:
     calls = []
     for m in _TOOL_RE.finditer(text):
         try: calls.append(json.loads(m.group(1)))
@@ -919,16 +957,24 @@ def parse_calls(text: str) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 class Agent:
     def __init__(self, cfg: dict):
-        self.cfg          = cfg
-        self.client       = DeepSeekClient(cfg["auth_token"])
-        self.chat_id      = self.client.create_session()
-        self.parent_id    = None
-        self._first_turn  = True
+        self.cfg         = cfg
+        self.client      = DeepSeekClient(cfg["auth_token"])
+        self.chat_id     = self.client.create_session()
+        self.chat_title  = "New chat"
+        self.parent_id   = None
+        self._first_turn = True
 
     def _new_session(self):
         self.chat_id     = self.client.create_session()
+        self.chat_title  = "New chat"
         self.parent_id   = None
         self._first_turn = True
+
+    def _load_chat(self, chat_id: str, title: str = ""):
+        self.chat_id     = chat_id
+        self.chat_title  = title or "Loaded chat"
+        self.parent_id   = None
+        self._first_turn = False
 
     def _stream(self, prompt: str) -> str:
         r1       = self.cfg["model"] == "r1"
@@ -937,7 +983,12 @@ class Agent:
         buf      = []
         in_think = False
 
-        print(f"\n{c(CYAN+BOLD,'◆ DeepSeek')} ", end="", flush=True)
+        cols = _cols()
+        fill = c(DIM, "─" * max(0, cols - 22))
+        print(f"\n  {c(BCYAN, '╭─────╮')}")
+        print(f"  {c(BCYAN, '│◉   ◉│')} {c(BCYAN+BOLD, 'DeepSeek')}  {fill}")
+        print()
+
         try:
             for chunk in self.client.stream(
                 self.chat_id, prompt, self.parent_id, thinking, search
@@ -945,7 +996,7 @@ class Agent:
                 kind, content = chunk["type"], chunk["content"]
                 if kind == "thinking":
                     if not in_think:
-                        print(f"\n{dim('╭─ thinking ─────────────────')}", flush=True)
+                        print(f"{dim('╭─ thinking ─────────────────')}", flush=True)
                         in_think = True
                     print(dim(content), end="", flush=True)
                 elif kind == "text":
@@ -1003,6 +1054,8 @@ class Agent:
 
     def turn(self, user_msg: str):
         if self._first_turn:
+            self.chat_title  = user_msg[:50].replace('\n', ' ')
+            _track_chat(self.chat_id, self.chat_title, self.cfg["model"])
             prompt = (SYSTEM_PROMPT.replace("{cwd}", os.getcwd()).replace("{platform}", sys.platform)
                       + "\n\n---\nUser: " + user_msg)
             self._first_turn = False
@@ -1039,6 +1092,7 @@ BANNER = (
 
 def _tty():  return sys.stdout.isatty()
 def _cols(): return shutil.get_terminal_size((80, 24)).columns
+def _rows(): return shutil.get_terminal_size((80, 24)).lines
 
 def _enter_app():
     if _tty(): sys.stdout.write("\033[?1049h\033[H"); sys.stdout.flush()
@@ -1049,13 +1103,14 @@ def _exit_app():
 def _cls():
     if _tty(): sys.stdout.write("\033[2J\033[H"); sys.stdout.flush()
 
-def _vis_len(s):
+def _vis_len(s: str) -> int:
     return len(re.sub(r'\033\[[^m]*m', '', s))
 
 def _box(lines, title=""):
-    W  = min(_cols() - 2, 78)
-    d  = W - 2    # dash count between corners
-    cw = W - 4    # content width (between │ space and space │)
+    cols = _cols()
+    W    = max(40, min(cols - 2, 120))
+    d    = W - 2
+    cw   = W - 4
 
     if title:
         t   = f" {title} "
@@ -1065,7 +1120,8 @@ def _box(lines, title=""):
 
     rows = [top]
     for ln in lines:
-        pad = " " * max(0, cw - _vis_len(ln))
+        vl  = _vis_len(ln)
+        pad = " " * max(0, cw - vl)
         rows.append(c(BCYAN, "│") + " " + ln + pad + " " + c(BCYAN, "│"))
     rows.append(c(BCYAN, "╰" + "─" * d + "╯"))
     return "\n".join(rows)
@@ -1079,19 +1135,28 @@ def _sep(label=""):
 def _kv(k, v, w=11):
     return f"  {c(BLUE+DIM, k)}{' ' * max(0, w - len(k))}{v}"
 
-def _welcome_lines(cfg, session_id):
+def _welcome_lines(cfg, chat_id, chat_title):
     mn  = _MNAMES.get(cfg["model"], cfg["model"])
     cwd = os.getcwd().replace(str(Path.home()), "~")
     return [
         "",
-        f"  {c(BCYAN+BOLD, '◆')}  {bold('DeepSeek Code')}",
-        f"     {c(DIM, 'Type /help for commands, /exit to quit.')}",
+        f"  {c(BCYAN, '╭─────╮')}",
+        f"  {c(BCYAN, '│◉   ◉│')}  {bold('DeepSeek Code')}",
+        f"        {c(DIM, 'Type /help for commands, /exit to quit.')}",
         "",
         _kv("model",     c(BCYAN+BOLD, mn)),
         _kv("directory", c(DIM, cwd)),
-        _kv("session",   c(DIM, session_id[:13] + "...")),
+        _kv("chat",      c(DIM, chat_title[:48])),
         "",
     ]
+
+def _show_welcome(cfg, chat_id, chat_title):
+    _cls()
+    print()
+    print(_box(_welcome_lines(cfg, chat_id, chat_title), title=f"DeepSeek Code  v{VERSION}"))
+    print()
+    print(_sep("input"))
+    print()
 
 def _show_update_page(new_ver):
     _cls()
@@ -1113,35 +1178,38 @@ def _show_update_page(new_ver):
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
 def _help_box():
-    def row(cmd, desc, w=18):
+    def row(cmd, desc, w=22):
         pad = " " * max(0, w - _vis_len(cmd))
         return f"  {c(BCYAN, cmd)}{pad}{c(DIM, desc)}"
     def sec(name):
         return f"\n  {c(BBLUE+BOLD, name)}"
     return _box([
         sec("model"),
-        row("/model flash", "deepseek-v4-flash  · fast, default"),
-        row("/model pro",   "deepseek-v4-pro    · smarter"),
-        row("/model r1",    "deepseek-r1        · reasoning"),
-        sec("session"),
-        row("/clear",       "new conversation"),
-        row("/cwd [path]",  "change directory"),
-        row("/login",       "re-authenticate"),
+        row("/model flash",  "deepseek-v4-flash  · fast, default"),
+        row("/model pro",    "deepseek-v4-pro    · smarter"),
+        row("/model r1",     "deepseek-r1        · reasoning"),
+        sec("chat"),
+        row("/new",          "start a new chat"),
+        row("/chats",        "list all chats"),
+        row("/chat <n>",     "switch to chat by number"),
+        row("/delete [n]",   "delete current or nth chat"),
+        row("/cwd [path]",   "change working directory"),
+        row("/login",        "re-authenticate"),
         sec("settings"),
-        row("/search",      "toggle web search (on by default)"),
-        row("/thinking",    "toggle r1 reasoning trace"),
-        row("/confirm",     "toggle shell confirmation"),
-        row("/status",      "show all settings"),
+        row("/search",       "toggle web search (on by default)"),
+        row("/thinking",     "toggle r1 reasoning trace"),
+        row("/confirm",      "toggle shell confirmation"),
+        row("/status",       "show current settings"),
         sec("other"),
-        row("/help",        "this page"),
-        row("/exit",        "quit"),
+        row("/help",         "this page"),
+        row("/exit",         "quit"),
         "",
         f"  {c(DIM, 'tools: bash · read_file · write_file · edit_file')}",
         f"  {c(DIM, '       list_dir · web_search · web_fetch · python')}",
         "",
     ], title="DeepSeek Code  /help")
 
-def _status_box(cfg, session_id=""):
+def _status_box(cfg, chat_id="", chat_title=""):
     mn  = _MNAMES.get(cfg["model"], cfg["model"])
     cwd = os.getcwd().replace(str(Path.home()), "~")
     on  = c(GREEN+BOLD, "on")
@@ -1155,18 +1223,83 @@ def _status_box(cfg, session_id=""):
         _kv("directory", c(DIM, cwd)),
         _kv("version",   c(DIM, VERSION)),
     ]
-    if session_id:
-        lines.append(_kv("session", c(DIM, session_id[:13] + "...")))
+    if chat_title:
+        lines.append(_kv("chat", c(DIM, chat_title[:48])))
     lines.append("")
     return _box(lines, title="DeepSeek Code  /status")
 
-def _show_welcome(cfg, session_id):
+def _show_chats(agent) -> list:
+    """Show chat list and return the entries for /chat <n> and /delete <n>."""
+    api_chats   = agent.client.list_chats()
+    local_chats = _load_local_chats()
+
+    if api_chats:
+        entries = []
+        for ch in api_chats[:30]:
+            cid   = ch.get("id", "")
+            title = (ch.get("title") or ch.get("name") or "Untitled")[:50]
+            model = ch.get("model", "")
+            entries.append({"id": cid, "title": title, "model": model})
+    else:
+        entries = [{"id": ch.get("id",""), "title": ch.get("title","Untitled")[:50],
+                    "model": ch.get("model","")} for ch in local_chats[:30]]
+
+    lines = [
+        "",
+        f"  {c(BBLUE+BOLD, 'Chats')}  {c(DIM, str(len(entries)) + ' total')}",
+        "",
+    ]
+    for i, e in enumerate(entries):
+        num   = c(DBLUE+BOLD, f"{i+1:2d}")
+        curr  = c(BCYAN+BOLD, " ◆") if e["id"] == agent.chat_id else "  "
+        title = e["title"]
+        tid   = c(DIM, "  " + e["id"][:8] + "…")
+        lines.append(f"  {num}{curr}  {title}{tid}")
+    if not entries:
+        lines.append(f"  {c(DIM, 'No chats yet — start a conversation to create one.')}")
+    lines += [
+        "",
+        f"  {c(DIM, '/chat <n>  switch  ·  /new  new chat  ·  /delete [n]  delete')}",
+        "",
+    ]
     _cls()
     print()
-    print(_box(_welcome_lines(cfg, session_id), title=f"DeepSeek Code  v{VERSION}"))
+    print(_box(lines, title="DeepSeek Code  /chats"))
     print()
     print(_sep("input"))
     print()
+    return entries
+
+def _delete_chat_cmd(agent, cfg, arg, entries):
+    if arg:
+        try:
+            n = int(arg) - 1
+            target = entries[n]
+        except (ValueError, IndexError, TypeError):
+            print(c(RED, "  Usage: /delete [n]  (run /chats to see numbers)"))
+            return
+    else:
+        target = {"id": agent.chat_id, "title": agent.chat_title}
+
+    is_current = target["id"] == agent.chat_id
+    try:
+        ans = input(f"  Delete {c(YELLOW, repr(target['title'][:40]))}? {c(DIM,'[y/N]')} ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return
+    if ans != "y":
+        return
+
+    ok = agent.client.delete_chat(target["id"])
+    _remove_local_chat(target["id"])
+
+    if ok:
+        print(f"  {c(GREEN,'✓')}  deleted")
+    else:
+        print(f"  {c(YELLOW,'⚠')}  removed locally (API delete may have failed)")
+
+    if is_current:
+        agent._new_session()
+        _show_welcome(cfg, agent.chat_id, agent.chat_title)
 
 def main():
     cfg  = load_cfg()
@@ -1185,11 +1318,17 @@ def main():
     ensure_wasm()
     _enter_app()
 
+    # SIGWINCH: redraw welcome on terminal resize
+    _resize = [False]
+    try:
+        signal.signal(signal.SIGWINCH, lambda s, f: _resize.__setitem__(0, True))
+    except (AttributeError, OSError):
+        pass
+
     try:
         if _PENDING_UPDATE:
             _show_update_page(_PENDING_UPDATE)
 
-        # Show ASCII banner + connecting spinner (banner stays visible)
         _cls()
         print()
         print(BANNER)
@@ -1234,14 +1373,19 @@ def main():
         _running[0] = False
         spin_t.join(timeout=1)
 
-        session_id = agent.chat_id
-        _show_welcome(cfg, session_id)
+        _show_welcome(cfg, agent.chat_id, agent.chat_title)
 
         def toggle(key, arg):
             cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
             save_cfg(cfg); return "on" if cfg[key] else "off"
 
+        _last_chats: list = []
+
         while True:
+            if _resize[0]:
+                _resize[0] = False
+                _show_welcome(cfg, agent.chat_id, agent.chat_title)
+
             try:
                 line = input(f"{c(BBLUE+BOLD, '❯')} ").strip()
             except (KeyboardInterrupt, EOFError):
@@ -1262,13 +1406,35 @@ def main():
                     print(_sep("input")); print()
 
                 elif cmd == "status":
-                    _cls(); print(); print(_status_box(cfg, session_id)); print()
+                    _cls(); print(); print(_status_box(cfg, agent.chat_id, agent.chat_title)); print()
                     print(_sep("input")); print()
 
-                elif cmd == "clear":
+                elif cmd in ("new", "clear"):
                     agent._new_session()
-                    session_id = agent.chat_id
-                    _show_welcome(cfg, session_id)
+                    _show_welcome(cfg, agent.chat_id, agent.chat_title)
+
+                elif cmd == "chats":
+                    _last_chats = _show_chats(agent)
+
+                elif cmd == "chat":
+                    if not arg:
+                        print(c(YELLOW, "  Usage: /chat <n>  (run /chats first)"))
+                    else:
+                        try:
+                            n = int(arg) - 1
+                            if _last_chats and 0 <= n < len(_last_chats):
+                                e = _last_chats[n]
+                                agent._load_chat(e["id"], e["title"])
+                                _show_welcome(cfg, agent.chat_id, agent.chat_title)
+                            else:
+                                print(c(YELLOW, "  Run /chats first to see chat numbers"))
+                        except ValueError:
+                            # treat as raw ID
+                            agent._load_chat(arg)
+                            _show_welcome(cfg, agent.chat_id, agent.chat_title)
+
+                elif cmd == "delete":
+                    _delete_chat_cmd(agent, cfg, arg, _last_chats)
 
                 elif cmd == "login":
                     do_login(cfg)
