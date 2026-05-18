@@ -9,7 +9,7 @@ Usage: deepseek
 # ─────────────────────────────────────────────────────────────────────────────
 # stdlib
 # ─────────────────────────────────────────────────────────────────────────────
-import os, sys, json, re, base64, html, time, threading, webbrowser
+import os, sys, json, re, base64, html, time, threading, webbrowser, shutil
 import subprocess, traceback, urllib.request, urllib.parse
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION     = "1.0.3"
+VERSION     = "1.0.4"
 _RAW_BASE   = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1023,10 +1023,10 @@ BANNER = (
     "  ██║  ██║██╔══╝  ██╔══╝  ██╔═══╝ ╚════██║██╔══╝  ██╔══╝  ██╔═██╗ \n"
     f"  ██████╔╝███████╗███████╗██║     ███████║███████╗███████╗██║  ██╗{R}\n"
     f"  {BBLUE}╚═════╝ ╚══════╝╚══════╝╚═╝     ╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝{R}\n"
-    f"\n  {DIM}v{VERSION}{R}\n"
 )
 
-def _tty(): return sys.stdout.isatty()
+def _tty():  return sys.stdout.isatty()
+def _cols(): return shutil.get_terminal_size((80, 24)).columns
 
 def _enter_app():
     if _tty(): sys.stdout.write("\033[?1049h\033[H"); sys.stdout.flush()
@@ -1037,78 +1037,124 @@ def _exit_app():
 def _cls():
     if _tty(): sys.stdout.write("\033[2J\033[H"); sys.stdout.flush()
 
-def _header(cfg):
-    model = c(BCYAN+BOLD, _MNAMES.get(cfg["model"], cfg["model"]))
-    cwd   = os.getcwd().replace(str(Path.home()), "~")
-    sep   = f"  {c(BLUE, '·')}  "
+def _vis_len(s):
+    return len(re.sub(r'\033\[[^m]*m', '', s))
 
-    parts = [model]
-    if cfg["model"] == "r1" and cfg["thinking"]:
-        parts.append(c(BBLUE, "thinking"))
-    parts.append(f"{c(BLUE+DIM, 'directory')} {c(DIM, cwd)}")
+def _box(lines, title=""):
+    W  = min(_cols() - 2, 78)
+    d  = W - 2    # dash count between corners
+    cw = W - 4    # content width (between │ space and space │)
 
-    line = sep.join(parts)
-    rule = c(DBLUE, "  " + "─" * 56)
-    return f"\n  {c(BCYAN+BOLD,'◆')}  {bold('DeepSeek')}  {c(DIM,'v'+VERSION)}\n\n  {line}\n\n{rule}\n"
+    if title:
+        t   = f" {title} "
+        top = c(BCYAN, "╭─" + t + "─" * max(0, d - len(t) - 1) + "╮")
+    else:
+        top = c(BCYAN, "╭" + "─" * d + "╮")
+
+    rows = [top]
+    for ln in lines:
+        pad = " " * max(0, cw - _vis_len(ln))
+        rows.append(c(BCYAN, "│") + " " + ln + pad + " " + c(BCYAN, "│"))
+    rows.append(c(BCYAN, "╰" + "─" * d + "╯"))
+    return "\n".join(rows)
+
+def _sep(label=""):
+    cols = _cols()
+    s    = f"── {label} " if label else "── "
+    fill = "─" * max(0, cols - len(s) - 1)
+    return c(DBLUE, s + fill)
+
+def _kv(k, v, w=11):
+    return f"  {c(BLUE+DIM, k)}{' ' * max(0, w - len(k))}{v}"
+
+def _welcome_lines(cfg, session_id):
+    mn  = _MNAMES.get(cfg["model"], cfg["model"])
+    cwd = os.getcwd().replace(str(Path.home()), "~")
+    return [
+        "",
+        f"  {c(BCYAN+BOLD, '◆')}  {bold('DeepSeek Code')}",
+        f"     {c(DIM, 'Type /help for commands, /exit to quit.')}",
+        "",
+        _kv("model",     c(BCYAN+BOLD, mn)),
+        _kv("directory", c(DIM, cwd)),
+        _kv("session",   c(DIM, session_id[:13] + "...")),
+        "",
+    ]
 
 def _show_update_page(new_ver):
     _cls()
-    print(f"\n  {c(BCYAN+BOLD,'◆')}  {bold('DeepSeek')}\n")
-    print(f"  {c(GREEN,'↑')}  {bold(VERSION + ' → ' + new_ver)}  {c(DIM,'update available')}\n")
+    print()
+    print(_box([
+        "",
+        f"  {c(GREEN+BOLD, '↑')}  {bold('Update available')}",
+        "",
+        f"  {c(DIM, VERSION)}  {c(BCYAN,'→')}  {c(BCYAN+BOLD, new_ver)}",
+        "",
+    ], title="DeepSeek Code"))
+    print()
     try:
-        ans = input(f"  {c(BBLUE,'Restart now?')} {c(DIM,'[y/n]')} ").strip().lower()
+        ans = input(f"  {c(BBLUE, 'Restart now?')} {c(DIM, '[y/n]')} ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         ans = "n"
     if ans == "y":
         _exit_app()
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-def _help_text():
-    def row(cmd, desc): return f"  {c(BCYAN, cmd):<28}{c(DIM, desc)}"
-    def section(name):  return f"\n  {c(BBLUE+BOLD, name)}"
-    rule = c(DBLUE, "  " + "─" * 56)
-    return (
-        f"\n  {c(BCYAN+BOLD,'◆')}  {bold('DeepSeek')}  {c(DIM,'/help')}\n"
-        f"\n{rule}\n"
-        f"{section('model')}\n"
-        f"{row('/model flash', 'deepseek-v4-flash  · fast, default')}\n"
-        f"{row('/model pro',   'deepseek-v4-pro    · smarter')}\n"
-        f"{row('/model r1',    'deepseek-r1        · deep reasoning')}\n"
-        f"{section('session')}\n"
-        f"{row('/clear',       'new conversation')}\n"
-        f"{row('/cwd [path]',  'change working directory')}\n"
-        f"{row('/login',       're-authenticate')}\n"
-        f"{section('settings')}\n"
-        f"{row('/search',      'toggle web search (on by default)')}\n"
-        f"{row('/thinking',    'toggle r1 reasoning trace')}\n"
-        f"{row('/confirm',     'toggle shell command confirmation')}\n"
-        f"{row('/status',      'show all settings')}\n"
-        f"{section('other')}\n"
-        f"{row('/help',        'this page')}\n"
-        f"{row('/exit',        'quit')}\n"
-        f"\n{rule}\n"
-        f"  {c(DIM, 'bash  ·  read_file  ·  write_file  ·  edit_file  ·  list_dir')}\n"
-        f"  {c(DIM, 'web_search  ·  web_fetch  ·  python')}\n"
-    )
+def _help_box():
+    def row(cmd, desc, w=18):
+        pad = " " * max(0, w - _vis_len(cmd))
+        return f"  {c(BCYAN, cmd)}{pad}{c(DIM, desc)}"
+    def sec(name):
+        return f"\n  {c(BBLUE+BOLD, name)}"
+    return _box([
+        sec("model"),
+        row("/model flash", "deepseek-v4-flash  · fast, default"),
+        row("/model pro",   "deepseek-v4-pro    · smarter"),
+        row("/model r1",    "deepseek-r1        · reasoning"),
+        sec("session"),
+        row("/clear",       "new conversation"),
+        row("/cwd [path]",  "change directory"),
+        row("/login",       "re-authenticate"),
+        sec("settings"),
+        row("/search",      "toggle web search (on by default)"),
+        row("/thinking",    "toggle r1 reasoning trace"),
+        row("/confirm",     "toggle shell confirmation"),
+        row("/status",      "show all settings"),
+        sec("other"),
+        row("/help",        "this page"),
+        row("/exit",        "quit"),
+        "",
+        f"  {c(DIM, 'tools: bash · read_file · write_file · edit_file')}",
+        f"  {c(DIM, '       list_dir · web_search · web_fetch · python')}",
+        "",
+    ], title="DeepSeek Code  /help")
 
-def _status_text(cfg):
-    model = _MNAMES.get(cfg["model"], cfg["model"])
-    cwd   = os.getcwd().replace(str(Path.home()), "~")
-    on    = c(GREEN+BOLD, "on ")
-    off   = c(DIM, "off")
-    def row(k, v): return f"  {c(BLUE+DIM, k):<24}{v}"
-    rule = c(DBLUE, "  " + "─" * 56)
-    return (
-        f"\n  {c(BCYAN+BOLD,'◆')}  {bold('DeepSeek')}  {c(DIM,'/status')}\n"
-        f"\n{rule}\n"
-        f"{row('model',     c(BCYAN+BOLD, model))}\n"
-        f"{row('search',    on if cfg['search']       else off)}\n"
-        f"{row('thinking',  on if cfg['thinking']     else off)}\n"
-        f"{row('confirm',   on if cfg['confirm_bash'] else off)}\n"
-        f"{row('directory', c(DIM, cwd))}\n"
-        f"{row('version',   c(DIM, VERSION))}\n"
-        f"\n{rule}\n"
-    )
+def _status_box(cfg, session_id=""):
+    mn  = _MNAMES.get(cfg["model"], cfg["model"])
+    cwd = os.getcwd().replace(str(Path.home()), "~")
+    on  = c(GREEN+BOLD, "on")
+    off = c(DIM, "off")
+    lines = [
+        "",
+        _kv("model",     c(BCYAN+BOLD, mn)),
+        _kv("search",    on if cfg["search"]       else off),
+        _kv("thinking",  on if cfg["thinking"]     else off),
+        _kv("confirm",   on if cfg["confirm_bash"] else off),
+        _kv("directory", c(DIM, cwd)),
+        _kv("version",   c(DIM, VERSION)),
+    ]
+    if session_id:
+        lines.append(_kv("session", c(DIM, session_id[:13] + "...")))
+    lines.append("")
+    return _box(lines, title="DeepSeek Code  /status")
+
+def _show_welcome(cfg, session_id):
+    _cls()
+    print()
+    print(_box(_welcome_lines(cfg, session_id), title=f"DeepSeek Code  v{VERSION}"))
+    print()
+    print(_sep("input"))
+    print()
 
 def main():
     cfg  = load_cfg()
@@ -1125,30 +1171,50 @@ def main():
             raise SystemExit("Login failed — no token captured.")
 
     ensure_wasm()
-
     _enter_app()
+
     try:
         if _PENDING_UPDATE:
             _show_update_page(_PENDING_UPDATE)
 
+        # Show ASCII banner + connecting spinner (banner stays visible)
         _cls()
+        print()
         print(BANNER)
+        print()
+
+        _running = [True]
+        def _spin():
+            frames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
+            i = 0
+            while _running[0]:
+                sys.stdout.write(f"\r  {c(BCYAN, frames[i % 10])}  {c(DIM, 'connecting...')}")
+                sys.stdout.flush()
+                time.sleep(0.08)
+                i += 1
+            sys.stdout.write("\r" + " " * 30 + "\r")
+            sys.stdout.flush()
+
+        spin_t = threading.Thread(target=_spin, daemon=True)
+        spin_t.start()
 
         agent = Agent(cfg)
 
-        _cls()
-        print(_header(cfg))
+        _running[0] = False
+        spin_t.join(timeout=1)
+
+        session_id = agent.chat_id
+        _show_welcome(cfg, session_id)
 
         def toggle(key, arg):
             cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
-            save_cfg(cfg)
-            return "on" if cfg[key] else "off"
+            save_cfg(cfg); return "on" if cfg[key] else "off"
 
         while True:
             try:
-                line = input(f"{c(BBLUE+BOLD,'❯')} ").strip()
+                line = input(f"{c(BBLUE+BOLD, '❯')} ").strip()
             except (KeyboardInterrupt, EOFError):
-                print(f"\n{c(DIM,'bye')}")
+                print(f"\n{c(DIM, 'bye')}")
                 break
             if not line: continue
 
@@ -1161,45 +1227,54 @@ def main():
                     print(c(DIM, "bye")); break
 
                 elif cmd == "help":
-                    _cls(); print(_help_text())
+                    _cls(); print(); print(_help_box()); print()
+                    print(_sep("input")); print()
 
                 elif cmd == "status":
-                    _cls(); print(_status_text(cfg))
+                    _cls(); print(); print(_status_box(cfg, session_id)); print()
+                    print(_sep("input")); print()
 
                 elif cmd == "clear":
                     agent._new_session()
-                    _cls(); print(_header(cfg))
+                    session_id = agent.chat_id
+                    _show_welcome(cfg, session_id)
 
                 elif cmd == "login":
                     do_login(cfg)
                     agent.client._cookies, agent.client._ua = load_cookies()
-                    print(c(GREEN, "  ✓  logged in"))
+                    print(f"  {c(GREEN,'✓')}  {c(DIM, 'logged in')}")
 
                 elif cmd == "model":
                     if arg in ("flash","pro","r1"):
                         cfg["model"] = arg; save_cfg(cfg)
-                    print(f"  {c(BCYAN+BOLD, _MNAMES.get(cfg['model'],cfg['model']))}")
+                    print(f"  {c(BCYAN+BOLD, _MNAMES.get(cfg['model'], cfg['model']))}")
 
                 elif cmd == "thinking":
                     v = toggle("thinking", arg)
-                    print(f"  thinking {c(GREEN+BOLD,'on') if v=='on' else c(DIM,'off')}")
+                    print(f"  thinking  {c(GREEN+BOLD,'on') if v=='on' else c(DIM,'off')}")
 
                 elif cmd == "search":
                     v = toggle("search", arg)
-                    print(f"  search {c(GREEN+BOLD,'on') if v=='on' else c(DIM,'off')}")
+                    print(f"  search  {c(GREEN+BOLD,'on') if v=='on' else c(DIM,'off')}")
 
                 elif cmd == "confirm":
                     v = toggle("confirm_bash", arg)
-                    print(f"  confirm {c(GREEN+BOLD,'on') if v=='on' else c(DIM,'off')}")
+                    print(f"  confirm  {c(GREEN+BOLD,'on') if v=='on' else c(DIM,'off')}")
 
                 elif cmd == "cwd":
                     if arg:
-                        try: os.chdir(arg); print(f"  {c(BLUE+DIM,'directory')} {c(DIM, os.getcwd().replace(str(Path.home()),'~'))}")
-                        except Exception as e: print(c(RED, f"  {e}"))
-                    else: print(f"  {c(BLUE+DIM,'directory')} {c(DIM, os.getcwd().replace(str(Path.home()),'~'))}")
+                        try:
+                            os.chdir(arg)
+                            cwd = os.getcwd().replace(str(Path.home()), "~")
+                            print(f"  {c(BLUE+DIM,'directory')}  {c(DIM, cwd)}")
+                        except Exception as e:
+                            print(c(RED, f"  {e}"))
+                    else:
+                        cwd = os.getcwd().replace(str(Path.home()), "~")
+                        print(f"  {c(BLUE+DIM,'directory')}  {c(DIM, cwd)}")
 
                 else:
-                    print(c(YELLOW, f"  unknown command — /help"))
+                    print(c(YELLOW, "  unknown command — /help"))
                 continue
 
             try:
