@@ -49,7 +49,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "1.0.10"
+VERSION   = "1.0.11"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1157,11 +1157,11 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
     return [
         "",
         f"  {av1}  {bold('Welcome back, ' + uname + '!')}",
-        f"  {av2}  {c(DIM, 'Type /help for commands · /exit to quit')}",
+        f"  {av2}  {c(DIM, 'Send /help for help · /exit to quit.')}",
         "",
-        f"  {c(DIM, 'model')}      {c(DIM, mn)}",
-        f"  {c(DIM, 'directory')}  {c(DIM, cwd)}",
-        f"  {c(DIM, 'chat')}       {c(DIM, chat_title[:48])}",
+        f"  {c(DIM, 'directory:')}  {c(DIM, cwd)}",
+        f"  {c(DIM, 'model:')}      {c(DIM, mn)}",
+        f"  {c(DIM, 'chat:')}       {c(DIM, chat_title[:48] if chat_title else 'New chat')}",
         "",
     ]
 
