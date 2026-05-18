@@ -16,10 +16,10 @@ from typing import Generator
 # ANSI
 # ─────────────────────────────────────────────────────────────────────────────
 R, BOLD, DIM, ITALIC = "\033[0m", "\033[1m", "\033[2m", "\033[3m"
-CYAN, GREEN, YELLOW, RED, BLUE = "\033[36m", "\033[32m", "\033[33m", "\033[31m", "\033[34m"
-BCYAN = "\033[96m"
-BBLUE = "\033[94m"
-DBLUE = "\033[38;5;27m"
+CYAN, GREEN, YELLOW, RED, BLUE = "\033[38;5;44m", "\033[38;5;35m", "\033[38;5;220m", "\033[38;5;196m", "\033[38;5;33m"
+BCYAN = "\033[38;5;51m"   # true cyan  (256-color, SSH-safe)
+BBLUE = "\033[38;5;75m"   # true blue  (256-color, SSH-safe)
+DBLUE = "\033[38;5;27m"   # deep blue
 def c(col, t): return f"{col}{t}{R}"
 def bold(t):   return c(BOLD, t)
 def dim(t):    return c(DIM, t)
@@ -36,6 +36,8 @@ IS_ANDROID = IS_TERMUX or Path("/system/build.prop").exists()
 
 class AuthError(Exception): pass
 
+_live_state = {"fn": None}  # stores header render fn for live resize
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS & DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "1.0.11"
+VERSION   = "1.0.12"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1167,11 +1169,14 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
 
 def _show_welcome(cfg, chat_id, chat_title, user_name=""):
     _cls()
-    print()
-    print(_box(_welcome_lines(cfg, chat_id, chat_title, user_name), title=f"DeepSeek Code  v{VERSION}"))
-    print()
-    print(_sep("input"))
-    print()
+    # Store render function for live SIGWINCH redraws
+    def _render():
+        return ("\n" +
+                _box(_welcome_lines(cfg, chat_id, chat_title, user_name),
+                     title=f"DeepSeek Code  v{VERSION}") +
+                "\n\n" + _sep("input") + "\n")
+    _live_state["fn"] = _render
+    print(_render(), end="")
 
 def _show_update_page(new_ver):
     _cls()
@@ -1333,10 +1338,27 @@ def main():
     ensure_wasm()
     _enter_app()
 
-    # SIGWINCH: redraw welcome on terminal resize
-    _resize = [False]
+    # SIGWINCH: immediately redraw header in-place (live resize)
+    def _sigwinch_handler(sig, frame):
+        fn = _live_state.get("fn")
+        if fn is None or not sys.stdout.isatty():
+            return
+        try:
+            content = fn()
+            lines   = content.splitlines()
+            out = [b"\0337\033[?25l"]          # DECSC save cursor + hide cursor
+            for i, ln in enumerate(lines):
+                out.append(f"\033[{i+1};1H\033[K{ln}".encode())
+            out.append(b"\033[?25h\0338")      # show cursor + DECRC restore cursor
+            os.write(1, b"".join(out))
+            try:
+                import readline as _rl; _rl.redisplay()
+            except Exception:
+                pass
+        except Exception:
+            pass
     try:
-        signal.signal(signal.SIGWINCH, lambda s, f: _resize.__setitem__(0, True))
+        signal.signal(signal.SIGWINCH, _sigwinch_handler)
     except (AttributeError, OSError):
         pass
 
@@ -1395,10 +1417,6 @@ def main():
         _last_chats: list = []
 
         while True:
-            if _resize[0]:
-                _resize[0] = False
-                _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
-
             try:
                 line = input(f"{c(BBLUE+BOLD, '❯')} ").strip()
             except (KeyboardInterrupt, EOFError):
