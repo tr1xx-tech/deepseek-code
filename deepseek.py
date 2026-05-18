@@ -15,7 +15,7 @@ from typing import Generator
 # ─────────────────────────────────────────────────────────────────────────────
 # ANSI
 # ─────────────────────────────────────────────────────────────────────────────
-R, BOLD, DIM, ITALIC = "\033[0m", "\033[1m", "\033[2m", "\033[3m"
+R, BOLD, DIM, ITALIC = "\033[0m", "\033[1m", "\033[38;5;245m", "\033[3m"
 CYAN, GREEN, YELLOW, RED, BLUE = "\033[38;5;44m", "\033[38;5;35m", "\033[38;5;220m", "\033[38;5;196m", "\033[38;5;33m"
 BCYAN = "\033[38;5;51m"   # true cyan  (256-color, SSH-safe)
 BBLUE = "\033[38;5;75m"   # true blue  (256-color, SSH-safe)
@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "1.0.12"
+VERSION   = "1.0.13"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
