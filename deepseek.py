@@ -6,7 +6,7 @@ deepseek.py — DeepSeek Code Agent
 # ─────────────────────────────────────────────────────────────────────────────
 # stdlib
 # ─────────────────────────────────────────────────────────────────────────────
-import os, sys, json, re, base64, html, time, threading, webbrowser, shutil, signal
+import os, sys, json, re, base64, html, time, threading, webbrowser, shutil, signal, getpass
 import subprocess, traceback, urllib.request, urllib.parse
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -49,7 +49,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "1.0.8"
+VERSION   = "1.0.9"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -983,10 +983,6 @@ class Agent:
         buf      = []
         in_think = False
 
-        cols = _cols()
-        fill = c(DIM, "─" * max(0, cols - 22))
-        print(f"\n  {c(BCYAN, '╭─────╮')}")
-        print(f"  {c(BCYAN, '│◉   ◉│')} {c(BCYAN+BOLD, 'DeepSeek')}  {fill}")
         print()
 
         try:
@@ -1080,15 +1076,6 @@ class Agent:
 # ─────────────────────────────────────────────────────────────────────────────
 _MNAMES = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro", "r1": "deepseek-r1"}
 
-BANNER = (
-    f"{BCYAN}{BOLD}"
-    "  ██████╗ ███████╗███████╗██████╗ ███████╗███████╗███████╗██╗  ██╗\n"
-    "  ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝██╔════╝██╔════╝██║ ██╔╝\n"
-    "  ██║  ██║█████╗  █████╗  ██████╔╝███████╗█████╗  █████╗  █████╔╝ \n"
-    "  ██║  ██║██╔══╝  ██╔══╝  ██╔═══╝ ╚════██║██╔══╝  ██╔══╝  ██╔═██╗ \n"
-    f"  ██████╔╝███████╗███████╗██║     ███████║███████╗███████╗██║  ██╗{R}\n"
-    f"  {BBLUE}╚═════╝ ╚══════╝╚══════╝╚═╝     ╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝{R}\n"
-)
 
 def _tty():  return sys.stdout.isatty()
 def _cols(): return shutil.get_terminal_size((80, 24)).columns
@@ -1138,15 +1125,18 @@ def _kv(k, v, w=11):
 def _welcome_lines(cfg, chat_id, chat_title):
     mn  = _MNAMES.get(cfg["model"], cfg["model"])
     cwd = os.getcwd().replace(str(Path.home()), "~")
+    try:    uname = getpass.getuser()
+    except: uname = os.environ.get("USER") or os.environ.get("USERNAME") or "there"
+    av1 = c(BCYAN+BOLD, "█████")
+    av2 = c(BCYAN+BOLD, "█") + c(BCYAN, "· ·") + c(BCYAN+BOLD, "█")
     return [
         "",
-        f"  {c(BCYAN, '╭─────╮')}",
-        f"  {c(BCYAN, '│◉   ◉│')}  {bold('DeepSeek Code')}",
-        f"        {c(DIM, 'Type /help for commands, /exit to quit.')}",
+        f"  {av1}  {bold('Welcome back, ' + uname + '!')}",
+        f"  {av2}  {c(DIM, 'Type /help for commands · /exit to quit')}",
         "",
-        _kv("model",     c(BCYAN+BOLD, mn)),
-        _kv("directory", c(DIM, cwd)),
-        _kv("chat",      c(DIM, chat_title[:48])),
+        f"  {c(DIM, 'model')}      {c(DIM, mn)}",
+        f"  {c(DIM, 'directory')}  {c(DIM, cwd)}",
+        f"  {c(DIM, 'chat')}       {c(DIM, chat_title[:48])}",
         "",
     ]
 
@@ -1331,8 +1321,6 @@ def main():
 
         _cls()
         print()
-        print(BANNER)
-        print()
 
         _running = [True]
         def _spin():
@@ -1364,7 +1352,7 @@ def main():
             print()
             do_login(cfg)
             if not cfg["auth_token"]: raise SystemExit("Login failed.")
-            _cls(); print(); print(BANNER); print()
+            _cls(); print()
             _running[0] = True
             spin_t = threading.Thread(target=_spin, daemon=True)
             spin_t.start()
