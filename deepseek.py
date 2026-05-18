@@ -47,23 +47,24 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION     = "1.0.1"
+VERSION     = "1.0.2"
 _RAW_BASE   = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
+_PENDING_UPDATE = None
+
 def _check_update():
-    """Silently check for a newer version and self-update deepseek.py if available."""
+    global _PENDING_UPDATE
     try:
         req = urllib.request.Request(f"{_RAW_BASE}/VERSION",
                                      headers={"User-Agent": "deepseek/1.0"})
         remote = urllib.request.urlopen(req, timeout=4).read().decode().strip()
         if remote == VERSION:
             return
-        self_path = Path(__file__).resolve()
         req2 = urllib.request.Request(f"{_RAW_BASE}/deepseek.py",
                                       headers={"User-Agent": "deepseek/1.0"})
         new_src = urllib.request.urlopen(req2, timeout=15).read()
-        self_path.write_bytes(new_src)
-        print(f"{c(CYAN,'↑')} Updated {VERSION} → {remote} — restart to apply")
+        Path(__file__).resolve().write_bytes(new_src)
+        _PENDING_UPDATE = remote
     except Exception:
         pass
 
@@ -72,7 +73,7 @@ DEFAULTS = dict(
     auth_token   = "",
     model        = "flash",    # "flash" | "pro" | "r1"
     thinking     = False,
-    search       = False,
+    search       = True,
     confirm_bash = True,
     bash_timeout = 30,
     max_file_kb  = 200,
@@ -1008,38 +1009,90 @@ class Agent:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
+# ──────────────────────────# ─────────────────────────────────────────────────────────────────────────────
+# CLI
 # ─────────────────────────────────────────────────────────────────────────────
-BANNER = (
-    c(CYAN+BOLD,
-      "\n  ____           _     ____          _\n"
-      " |  _ \\  ___  ___| | __/ ___|___   __| | ___ _ __\n"
-      " | | | |/ _ \\/ _ \\ |/ / /   / _ \\ / _` |/ _ \\ '__|\n"
-      " | |_| |  __/  __/   <| |__| (_) | (_| |  __/ |\n"
-      " |____/ \\___|\\___|_|\\_\\\\____\\___/ \\__,_|\\___|_|\n")
-    + "  " + dim("AI agent · your DeepSeek account · no API key") + "\n"
-)
+_MNAMES = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro", "r1": "deepseek-r1"}
 
-HELP = f"""
-{bold("Commands")}
-  /login             Re-authenticate (browser on desktop, terminal on Termux)
-  /model [flash|pro|r1]  Switch model  (flash=fast · pro=smarter · r1=reasoning)
-  /thinking [on|off] R1 thinking output  (r1 only)
-  /search [on|off]   DeepSeek built-in web search
-  /confirm [on|off]  Confirm dangerous shell commands
-  /clear             New conversation session
-  /cwd [path]        Show or change working directory
-  /help              This message
-  /exit              Quit
+def _tty(): return sys.stdout.isatty()
 
-{bold("Agent tools")}
-  bash · read_file · write_file · edit_file · list_dir
-  web_search · web_fetch · python
+def _enter_app():
+    if _tty(): sys.stdout.write("\033[?1049h\033[H"); sys.stdout.flush()
 
-{bold("Tips")}
-  • pro / r1 are better for complex multi-step tasks
-  • /search on  lets DeepSeek search the web mid-answer
-  • Ctrl+C interrupts the current response (session stays alive)
-"""
+def _exit_app():
+    if _tty(): sys.stdout.write("\033[?1049l"); sys.stdout.flush()
+
+def _cls():
+    if _tty(): sys.stdout.write("\033[2J\033[H"); sys.stdout.flush()
+
+def _header(cfg):
+    model = c(CYAN, _MNAMES.get(cfg["model"], cfg["model"]))
+    cwd   = os.getcwd().replace(str(Path.home()), "~")
+    parts = [model]
+    if cfg["model"] == "r1" and cfg["thinking"]:
+        parts.append(dim("thinking"))
+    parts.append(dim(cwd))
+    line = f"  {dim('·')}  ".join(parts)
+    return (
+        f"\n  {c(CYAN+BOLD,'◆')}  {bold('DeepSeek')}  {dim('v'+VERSION)}\n\n"
+        f"  {line}\n\n"
+        f"  {dim('─' * 54)}\n"
+    )
+
+def _show_update_page(new_ver):
+    _cls()
+    print(f"\n  {c(CYAN+BOLD,'◆')}  {bold('DeepSeek')}\n")
+    print(f"  {c(GREEN,'↑')}  {bold(VERSION + ' → ' + new_ver)}\n")
+    try:
+        ans = input(f"  Restart now? {dim('[y/n]')} ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        ans = "n"
+    if ans == "y":
+        _exit_app()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    _cls()
+
+def _help_text():
+    return (
+        f"\n  {c(CYAN+BOLD,'◆')}  {bold('DeepSeek')}  {dim('/help')}\n\n"
+        f"  {bold('model')}\n"
+        f"  {c(CYAN,'/model flash')}   {dim('deepseek-v4-flash  · fast')}\n"
+        f"  {c(CYAN,'/model pro')}     {dim('deepseek-v4-pro    · smarter')}\n"
+        f"  {c(CYAN,'/model r1')}      {dim('deepseek-r1        · reasoning')}\n\n"
+        f"  {bold('session')}\n"
+        f"  {c(CYAN,'/clear')}         {dim('new conversation')}\n"
+        f"  {c(CYAN,'/cwd')} {dim('[path]')}   {dim('change directory')}\n"
+        f"  {c(CYAN,'/login')}         {dim('re-authenticate')}\n\n"
+        f"  {bold('settings')}\n"
+        f"  {c(CYAN,'/search')}        {dim('toggle web search')}\n"
+        f"  {c(CYAN,'/thinking')}      {dim('toggle r1 reasoning trace')}\n"
+        f"  {c(CYAN,'/confirm')}       {dim('toggle shell confirmation')}\n"
+        f"  {c(CYAN,'/status')}        {dim('all settings')}\n\n"
+        f"  {bold('other')}\n"
+        f"  {c(CYAN,'/help')}          {dim('this page')}\n"
+        f"  {c(CYAN,'/exit')}          {dim('quit')}\n"
+        f"\n  {dim('─' * 54)}\n"
+        f"  {dim('bash · read_file · write_file · edit_file · list_dir')}\n"
+        f"  {dim('web_search · web_fetch · python')}\n"
+    )
+
+def _status_text(cfg):
+    model = _MNAMES.get(cfg["model"], cfg["model"])
+    cwd   = os.getcwd().replace(str(Path.home()), "~")
+    on  = c(GREEN, "on")
+    off = dim("off")
+    rows = [
+        ("model",    bold(model)),
+        ("search",   on if cfg["search"]       else off),
+        ("thinking", on if cfg["thinking"]     else off),
+        ("confirm",  on if cfg["confirm_bash"] else off),
+        ("cwd",      dim(cwd)),
+        ("version",  dim(VERSION)),
+    ]
+    out = [f"\n  {c(CYAN+BOLD,'◆')}  {bold('DeepSeek')}  {dim('/status')}\n"]
+    for k, v in rows:
+        out.append(f"  {dim(k):<20}{v}")
+    return "\n".join(out) + "\n"
 
 def main():
     cfg  = load_cfg()
@@ -1055,59 +1108,88 @@ def main():
         if not cfg["auth_token"]:
             raise SystemExit("Login failed — no token captured.")
 
-    # Ensure WASM binary is ready
     ensure_wasm()
 
-    print(BANNER)
-    _MNAMES = {"flash":"deepseek-v4-flash","pro":"deepseek-v4-pro","r1":"deepseek-r1"}
-    flags = "  ".join(f"{k}={bold('on' if cfg[k] else 'off')}"
-                      for k in ("search","thinking","confirm_bash"))
-    print(f"  model={bold(_MNAMES.get(cfg['model'],cfg['model']))}  {flags}")
-    print(f"  cwd={dim(os.getcwd())}\n")
+    _enter_app()
+    try:
+        if _PENDING_UPDATE:
+            _show_update_page(_PENDING_UPDATE)
 
-    agent = Agent(cfg)
-    print(c(GREEN, "Connected ✓") + "\n")
+        _cls()
+        print(_header(cfg))
 
-    def toggle(key, arg):
-        cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
-        save_cfg(cfg)
-        return "on" if cfg[key] else "off"
+        agent = Agent(cfg)
 
-    while True:
-        try:
-            line = input(f"{c(BLUE+BOLD,'❯')} ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print(f"\n{dim('bye')}")
-            break
-        if not line: continue
+        def toggle(key, arg):
+            cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
+            save_cfg(cfg)
+            return "on" if cfg[key] else "off"
 
-        if line.startswith("/"):
-            parts = line[1:].split(maxsplit=1)
-            cmd   = parts[0].lower()
-            arg   = parts[1].strip() if len(parts)>1 else ""
-            if   cmd=="exit":    print(dim("bye")); break
-            elif cmd=="help":    print(HELP)
-            elif cmd=="login":   do_login(cfg); agent.client._cookies, agent.client._ua = load_cookies()
-            elif cmd=="clear":   agent._new_session(); print(c(GREEN,"Session cleared."))
-            elif cmd=="model":
-                if arg in ("flash","pro","r1"): cfg["model"]=arg; save_cfg(cfg)
-                _MNAMES = {"flash":"deepseek-v4-flash","pro":"deepseek-v4-pro","r1":"deepseek-r1"}
-                print(f"model = {bold(_MNAMES.get(cfg['model'],cfg['model']))}")
-            elif cmd=="thinking": print(f"thinking = {bold(toggle('thinking',arg))}")
-            elif cmd=="search":   print(f"search = {bold(toggle('search',arg))}")
-            elif cmd=="confirm":  print(f"confirm_bash = {bold(toggle('confirm_bash',arg))}")
-            elif cmd=="cwd":
-                if arg:
-                    try: os.chdir(arg); print(f"cwd = {os.getcwd()}")
-                    except Exception as e: print(c(RED,str(e)))
-                else: print(f"cwd = {os.getcwd()}")
-            else: print(c(YELLOW,f"Unknown: /{cmd}  — /help"))
-            continue
+        while True:
+            try:
+                line = input(f"{c(BLUE+BOLD,'❯')} ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{dim('bye')}")
+                break
+            if not line: continue
 
-        try:
-            agent.turn(line)
-        except KeyboardInterrupt:
-            print(f"\n{c(YELLOW,'[interrupted]')}")
+            if line.startswith("/"):
+                parts = line[1:].split(maxsplit=1)
+                cmd   = parts[0].lower()
+                arg   = parts[1].strip() if len(parts)>1 else ""
+
+                if cmd == "exit":
+                    print(dim("bye")); break
+
+                elif cmd == "help":
+                    _cls(); print(_help_text())
+
+                elif cmd == "status":
+                    _cls(); print(_status_text(cfg))
+
+                elif cmd == "clear":
+                    agent._new_session()
+                    _cls(); print(_header(cfg))
+
+                elif cmd == "login":
+                    do_login(cfg)
+                    agent.client._cookies, agent.client._ua = load_cookies()
+                    print(c(GREEN, "✓  logged in"))
+
+                elif cmd == "model":
+                    if arg in ("flash","pro","r1"):
+                        cfg["model"] = arg; save_cfg(cfg)
+                    print(f"  {c(CYAN, _MNAMES.get(cfg['model'],cfg['model']))}")
+
+                elif cmd == "thinking":
+                    v = toggle("thinking", arg)
+                    print(f"  thinking {c(GREEN,'on') if v=='on' else dim('off')}")
+
+                elif cmd == "search":
+                    v = toggle("search", arg)
+                    print(f"  search {c(GREEN,'on') if v=='on' else dim('off')}")
+
+                elif cmd == "confirm":
+                    v = toggle("confirm_bash", arg)
+                    print(f"  confirm {c(GREEN,'on') if v=='on' else dim('off')}")
+
+                elif cmd == "cwd":
+                    if arg:
+                        try: os.chdir(arg); print(f"  {dim(os.getcwd())}")
+                        except Exception as e: print(c(RED, str(e)))
+                    else: print(f"  {dim(os.getcwd())}")
+
+                else:
+                    print(c(YELLOW, f"  unknown command — /help"))
+                continue
+
+            try:
+                agent.turn(line)
+            except KeyboardInterrupt:
+                print(f"\n{c(YELLOW,'[interrupted]')}")
+
+    finally:
+        _exit_app()
 
 if __name__ == "__main__":
     main()
