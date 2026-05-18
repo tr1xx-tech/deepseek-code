@@ -987,7 +987,7 @@ class Agent:
 
     def turn(self, user_msg: str):
         if self._first_turn:
-            prompt = (SYSTEM_PROMPT.format(cwd=os.getcwd(), platform=sys.platform)
+            prompt = (SYSTEM_PROMPT.replace("{cwd}", os.getcwd()).replace("{platform}", sys.platform)
                       + "\n\n---\nUser: " + user_msg)
             self._first_turn = False
         else:
