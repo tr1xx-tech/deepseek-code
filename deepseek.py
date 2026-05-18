@@ -38,6 +38,8 @@ IS_TERMUX = (
 )
 IS_ANDROID = IS_TERMUX or Path("/system/build.prop").exists()
 
+class AuthError(Exception): pass
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS & DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,11 +308,10 @@ class DeepSeekClient:
     # ── public ────────────────────────────────────────────────────────────────
     def create_session(self) -> str:
         r = self._post("/chat_session/create", {"character_id": None})
-        data = r.json()
         try:
-            return data["data"]["biz_data"]["id"]
+            return r.json()["data"]["biz_data"]["id"]
         except (KeyError, TypeError):
-            raise SystemExit("Auth error: invalid token — run: deepseek --login")
+            raise AuthError("invalid token")
 
     def stream(self, chat_id: str, prompt: str,
                parent_id=None, thinking=False, search=False) -> Generator:
@@ -1209,32 +1210,26 @@ def main():
         spin_t = threading.Thread(target=_spin, daemon=True)
         spin_t.start()
 
-        while True:
-            try:
-                agent = Agent(cfg)
-                break
-            except SystemExit as e:
-                _running[0] = False
-                spin_t.join(timeout=1)
-                _cls()
-                print()
-                print(_box([
-                    "",
-                    f"  {c(RED+BOLD, '✗')}  {bold('Auth error — token is invalid or expired')}",
-                    f"     {c(DIM, 'Please log in again.')}",
-                    "",
-                ], title="DeepSeek Code"))
-                print()
-                do_login(cfg)
-                if not cfg["auth_token"]:
-                    raise SystemExit("Login failed.")
-                _cls()
-                print()
-                print(BANNER)
-                print()
-                _running[0] = True
-                spin_t = threading.Thread(target=_spin, daemon=True)
-                spin_t.start()
+        try:
+            agent = Agent(cfg)
+        except AuthError:
+            _running[0] = False; spin_t.join(timeout=1)
+            cfg["auth_token"] = ""; save_cfg(cfg)
+            _cls()
+            print()
+            print(_box([
+                "",
+                f"  {c(RED+BOLD, '✗')}  {bold('Token invalid — please log in again')}",
+                "",
+            ], title="DeepSeek Code"))
+            print()
+            do_login(cfg)
+            if not cfg["auth_token"]: raise SystemExit("Login failed.")
+            _cls(); print(); print(BANNER); print()
+            _running[0] = True
+            spin_t = threading.Thread(target=_spin, daemon=True)
+            spin_t.start()
+            agent = Agent(cfg)
 
         _running[0] = False
         spin_t.join(timeout=1)
