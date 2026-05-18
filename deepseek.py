@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION     = "1.0.4"
+VERSION     = "1.0.5"
 _RAW_BASE   = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -571,8 +571,14 @@ def _login_via_html(cfg: dict) -> tuple[str, dict, str]:
             self.end_headers()
             self.wfile.write(resp)
 
-    srv = HTTPServer(("127.0.0.1", PORT), H)
-    t   = threading.Thread(target=srv.serve_forever, daemon=True)
+    class _S(HTTPServer):
+        allow_reuse_address = True
+    srv = None
+    for _p in range(PORT, PORT + 10):
+        try: srv = _S(("127.0.0.1", _p), H); PORT = _p; break
+        except OSError: continue
+    if srv is None: raise OSError("No port available for login server")
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
 
     url = f"http://localhost:{PORT}"
@@ -634,21 +640,22 @@ async def _login_via_nodriver() -> tuple[str, dict, str]:
     return token, cookies, ua
 
 
+
+def _has_display() -> bool:
+    for var in ("SSH_CLIENT", "SSH_TTY", "SSH_CONNECTION"):
+        if os.environ.get(var): return False
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"): return False
+    return not IS_TERMUX and not IS_ANDROID
+
 def do_login(cfg: dict):
-    """Run login flow. Termux→terminal, desktop→nodriver or HTML page."""
-    if IS_TERMUX:
+    if IS_TERMUX or not _has_display():
         token, cookies, ua = _login_terminal(cfg)
     else:
         try:
             import nodriver  # noqa
             import asyncio
             token, cookies, ua = asyncio.run(_login_via_nodriver())
-        except ImportError:
-            print(f"  {dim('nodriver not found — using browser helper page')}")
-            print(f"  {dim('(pip install nodriver  for fully automatic login)')}")
-            token, cookies, ua = _login_via_html(cfg)
-        except Exception as e:
-            print(c(YELLOW, f"  nodriver error: {e} — falling back to helper page"))
+        except Exception:
             token, cookies, ua = _login_via_html(cfg)
 
     cfg["auth_token"] = token
