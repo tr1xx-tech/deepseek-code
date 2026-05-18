@@ -49,7 +49,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "1.0.9"
+VERSION   = "1.0.10"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -359,6 +359,20 @@ class DeepSeekClient:
     def delete_chat(self, chat_id: str) -> bool:
         r = self._delete(f"/chat_session/{chat_id}")
         return r is not None and r.status_code < 300
+
+    def get_user(self) -> dict:
+        """Fetch current user profile. Returns dict with name/email or {}."""
+        for path in ("/users/current_user", "/user/current_user", "/user"):
+            r = self._get(path)
+            if r is None or r.status_code != 200:
+                continue
+            try:
+                d = r.json().get("data", {}).get("biz_data", {})
+                if d:
+                    return d
+            except Exception:
+                pass
+        return {}
 
     def stream(self, chat_id: str, prompt: str,
                parent_id=None, thinking=False, search=False) -> Generator:
@@ -963,6 +977,14 @@ class Agent:
         self.chat_title  = "New chat"
         self.parent_id   = None
         self._first_turn = True
+        try:
+            _u = self.client.get_user()
+            self.user_name = (
+                _u.get("nickname") or _u.get("name") or
+                _u.get("username") or _u.get("email") or ""
+            ).split("@")[0]  # strip domain from email if needed
+        except Exception:
+            self.user_name = ""
 
     def _new_session(self):
         self.chat_id     = self.client.create_session()
@@ -1122,11 +1144,14 @@ def _sep(label=""):
 def _kv(k, v, w=11):
     return f"  {c(BLUE+DIM, k)}{' ' * max(0, w - len(k))}{v}"
 
-def _welcome_lines(cfg, chat_id, chat_title):
+def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
     mn  = _MNAMES.get(cfg["model"], cfg["model"])
     cwd = os.getcwd().replace(str(Path.home()), "~")
-    try:    uname = getpass.getuser()
-    except: uname = os.environ.get("USER") or os.environ.get("USERNAME") or "there"
+    if user_name:
+        uname = user_name
+    else:
+        try:    uname = getpass.getuser()
+        except: uname = os.environ.get("USER") or os.environ.get("USERNAME") or "there"
     av1 = c(BCYAN+BOLD, "█████")
     av2 = c(BCYAN+BOLD, "█") + c(BCYAN, "· ·") + c(BCYAN+BOLD, "█")
     return [
@@ -1140,10 +1165,10 @@ def _welcome_lines(cfg, chat_id, chat_title):
         "",
     ]
 
-def _show_welcome(cfg, chat_id, chat_title):
+def _show_welcome(cfg, chat_id, chat_title, user_name=""):
     _cls()
     print()
-    print(_box(_welcome_lines(cfg, chat_id, chat_title), title=f"DeepSeek Code  v{VERSION}"))
+    print(_box(_welcome_lines(cfg, chat_id, chat_title, user_name), title=f"DeepSeek Code  v{VERSION}"))
     print()
     print(_sep("input"))
     print()
@@ -1289,7 +1314,7 @@ def _delete_chat_cmd(agent, cfg, arg, entries):
 
     if is_current:
         agent._new_session()
-        _show_welcome(cfg, agent.chat_id, agent.chat_title)
+        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
 def main():
     cfg  = load_cfg()
@@ -1361,7 +1386,7 @@ def main():
         _running[0] = False
         spin_t.join(timeout=1)
 
-        _show_welcome(cfg, agent.chat_id, agent.chat_title)
+        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
         def toggle(key, arg):
             cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
@@ -1372,7 +1397,7 @@ def main():
         while True:
             if _resize[0]:
                 _resize[0] = False
-                _show_welcome(cfg, agent.chat_id, agent.chat_title)
+                _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
             try:
                 line = input(f"{c(BBLUE+BOLD, '❯')} ").strip()
@@ -1399,7 +1424,7 @@ def main():
 
                 elif cmd in ("new", "clear"):
                     agent._new_session()
-                    _show_welcome(cfg, agent.chat_id, agent.chat_title)
+                    _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
                 elif cmd == "chats":
                     _last_chats = _show_chats(agent)
@@ -1413,13 +1438,13 @@ def main():
                             if _last_chats and 0 <= n < len(_last_chats):
                                 e = _last_chats[n]
                                 agent._load_chat(e["id"], e["title"])
-                                _show_welcome(cfg, agent.chat_id, agent.chat_title)
+                                _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
                             else:
                                 print(c(YELLOW, "  Run /chats first to see chat numbers"))
                         except ValueError:
                             # treat as raw ID
                             agent._load_chat(arg)
-                            _show_welcome(cfg, agent.chat_id, agent.chat_title)
+                            _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
                 elif cmd == "delete":
                     _delete_chat_cmd(agent, cfg, arg, _last_chats)
