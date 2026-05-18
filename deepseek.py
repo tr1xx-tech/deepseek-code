@@ -47,7 +47,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION     = "1.0.0"
+VERSION     = "1.0.1"
 _RAW_BASE   = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 def _check_update():
@@ -70,7 +70,7 @@ def _check_update():
 
 DEFAULTS = dict(
     auth_token   = "",
-    model        = "v4",       # "v4" | "v4pro" | "r1"
+    model        = "flash",    # "flash" | "pro" | "r1"
     thinking     = False,
     search       = False,
     confirm_bash = True,
@@ -1022,7 +1022,7 @@ BANNER = (
 HELP = f"""
 {bold("Commands")}
   /login             Re-authenticate (browser on desktop, terminal on Termux)
-  /model [v4|v4pro|r1]  Switch model  (v4=fast · v4pro=smarter · r1=reasoning)
+  /model [flash|pro|r1]  Switch model  (flash=fast · pro=smarter · r1=reasoning)
   /thinking [on|off] R1 thinking output  (r1 only)
   /search [on|off]   DeepSeek built-in web search
   /confirm [on|off]  Confirm dangerous shell commands
@@ -1036,7 +1036,7 @@ HELP = f"""
   web_search · web_fetch · python
 
 {bold("Tips")}
-  • r1 / v4pro are better for complex multi-step tasks
+  • pro / r1 are better for complex multi-step tasks
   • /search on  lets DeepSeek search the web mid-answer
   • Ctrl+C interrupts the current response (session stays alive)
 """
@@ -1046,7 +1046,9 @@ def main():
     args = sys.argv[1:]
 
     if "--update" not in args:
-        threading.Thread(target=_check_update, daemon=True).start()
+        _upd = threading.Thread(target=_check_update, daemon=True)
+        _upd.start()
+        _upd.join(timeout=5)
 
     if "--login" in args or not cfg["auth_token"]:
         do_login(cfg)
@@ -1057,9 +1059,10 @@ def main():
     ensure_wasm()
 
     print(BANNER)
+    _MNAMES = {"flash":"deepseek-v4-flash","pro":"deepseek-v4-pro","r1":"deepseek-r1"}
     flags = "  ".join(f"{k}={bold('on' if cfg[k] else 'off')}"
                       for k in ("search","thinking","confirm_bash"))
-    print(f"  model={bold(cfg['model'].upper())}  {flags}")
+    print(f"  model={bold(_MNAMES.get(cfg['model'],cfg['model']))}  {flags}")
     print(f"  cwd={dim(os.getcwd())}\n")
 
     agent = Agent(cfg)
@@ -1087,8 +1090,9 @@ def main():
             elif cmd=="login":   do_login(cfg); agent.client._cookies, agent.client._ua = load_cookies()
             elif cmd=="clear":   agent._new_session(); print(c(GREEN,"Session cleared."))
             elif cmd=="model":
-                if arg in ("v4","v4pro","r1"): cfg["model"]=arg; save_cfg(cfg)
-                print(f"model = {bold(cfg['model'].upper())}")
+                if arg in ("flash","pro","r1"): cfg["model"]=arg; save_cfg(cfg)
+                _MNAMES = {"flash":"deepseek-v4-flash","pro":"deepseek-v4-pro","r1":"deepseek-r1"}
+                print(f"model = {bold(_MNAMES.get(cfg['model'],cfg['model']))}")
             elif cmd=="thinking": print(f"thinking = {bold(toggle('thinking',arg))}")
             elif cmd=="search":   print(f"search = {bold(toggle('search',arg))}")
             elif cmd=="confirm":  print(f"confirm_bash = {bold(toggle('confirm_bash',arg))}")
