@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.30"
+VERSION   = "0.31"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -406,6 +406,97 @@ class DeepSeekClient:
             }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BROWSER COOKIE AUTO-DETECT
+# ─────────────────────────────────────────────────────────────────────────────
+def _find_browser_cookies() -> dict:
+    """Try to read deepseek cookies from Chrome/Firefox/Brave/Edge on disk."""
+    import sqlite3, tempfile, glob
+
+    home = Path.home()
+    found = {}
+
+    # ── Chrome / Brave / Edge (SQLite Cookies) ────────────────────────────────
+    chrome_paths = []
+    if sys.platform == "darwin":
+        chrome_paths = [
+            home/"Library/Application Support/Google/Chrome/Default/Cookies",
+            home/"Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
+            home/"Library/Application Support/Microsoft Edge/Default/Cookies",
+        ]
+    elif sys.platform == "win32":
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        chrome_paths = [
+            local/"Google/Chrome/User Data/Default/Network/Cookies",
+            local/"BraveSoftware/Brave-Browser/User Data/Default/Network/Cookies",
+            local/"Microsoft/Edge/User Data/Default/Network/Cookies",
+        ]
+    else:
+        chrome_paths = [
+            home/".config/google-chrome/Default/Cookies",
+            home/".config/chromium/Default/Cookies",
+            home/".config/BraveSoftware/Brave-Browser/Default/Cookies",
+            home/".config/microsoft-edge/Default/Cookies",
+        ]
+
+    for p in chrome_paths:
+        if not p.exists():
+            continue
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp.write(p.read_bytes())
+                tmp_path = tmp.name
+            con = sqlite3.connect(tmp_path)
+            cur = con.execute(
+                "SELECT name, value, encrypted_value FROM cookies "
+                "WHERE host_key LIKE '%deepseek.com'"
+            )
+            for name, value, enc in cur.fetchall():
+                if value:
+                    found[name] = value
+                # encrypted_value on macOS/Win needs keyring — skip silently
+            con.close()
+            os.unlink(tmp_path)
+            if found:
+                return found
+        except Exception:
+            pass
+
+    # ── Firefox (SQLite cookies.sqlite) ──────────────────────────────────────
+    ff_roots = []
+    if sys.platform == "darwin":
+        ff_roots = list((home/"Library/Application Support/Firefox/Profiles").glob("*.default*"))
+    elif sys.platform == "win32":
+        roaming = Path(os.environ.get("APPDATA", ""))
+        ff_roots = list((roaming/"Mozilla/Firefox/Profiles").glob("*.default*"))
+    else:
+        ff_roots = list((home/".mozilla/firefox").glob("*.default*"))
+
+    for prof in ff_roots:
+        db = prof / "cookies.sqlite"
+        if not db.exists():
+            continue
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp.write(db.read_bytes())
+                tmp_path = tmp.name
+            con = sqlite3.connect(tmp_path)
+            cur = con.execute(
+                "SELECT name, value FROM moz_cookies WHERE host LIKE '%deepseek.com'"
+            )
+            for name, value in cur.fetchall():
+                if value:
+                    found[name] = value
+            con.close()
+            os.unlink(tmp_path)
+            if found:
+                return found
+        except Exception:
+            pass
+
+    return found
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BROWSER LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
 _LOGIN_HTML = r"""<!DOCTYPE html>
@@ -429,11 +520,12 @@ h1{font-size:1.35rem;font-weight:700;color:#fff;margin-bottom:6px}
 .sb p{font-size:.78rem;color:#777;line-height:1.55;margin-bottom:8px}
 .code{background:#0a0a0a;border:1px solid #252525;border-radius:7px;
       padding:9px 13px;font-family:monospace;font-size:.76rem;color:#7dd3fc;
-      display:flex;align-items:center;justify-content:space-between;gap:8px;
-      cursor:pointer;transition:border-color .18s}
+      cursor:pointer;transition:border-color .18s;position:relative}
 .code:hover{border-color:#3b82f6}
+.code-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.code-row span{word-break:break-all;overflow-wrap:anywhere;flex:1;min-width:0}
 .cp{font-size:.68rem;color:#555;background:none;border:none;cursor:pointer;
-    white-space:nowrap;padding:2px 6px;border-radius:4px;transition:all .15s}
+    white-space:nowrap;padding:2px 6px;border-radius:4px;transition:all .15s;flex-shrink:0}
 .cp:hover{background:#1e293b;color:#93c5fd}
 .cp.ok{color:#4ade80}
 input{width:100%;background:#0a0a0a;border:1px solid #252525;border-radius:7px;
@@ -446,6 +538,11 @@ input::placeholder{color:#444}
      transition:background .18s;letter-spacing:.01em}
 .btn:hover{background:#2563eb}
 .btn:disabled{background:#1e293b;color:#4b5563;cursor:not-allowed}
+.btn-auto{width:100%;margin-top:10px;padding:11px;background:#0f2a1a;border:1px solid #166534;
+     border-radius:8px;color:#4ade80;font-size:.85rem;font-weight:600;cursor:pointer;
+     transition:all .18s;letter-spacing:.01em}
+.btn-auto:hover{background:#14532d;border-color:#22c55e}
+.btn-auto:disabled{opacity:.4;cursor:not-allowed}
 .status{margin-top:14px;font-size:.78rem;text-align:center;min-height:18px;
         letter-spacing:.01em}
 .ok{color:#4ade80} .err{color:#f87171}
@@ -474,8 +571,10 @@ hr{border:none;border-top:1px solid #1e1e1e;margin:28px 0}
       <h3>Run this in DevTools Console</h3>
       <p>Press <b>F12</b> → Console, paste and press Enter:</p>
       <div class="code" onclick="copyCode(this)">
-        <span id="jscmd">copy(JSON.stringify({t:JSON.parse(localStorage.getItem("userToken")).value,c:document.cookie}))</span>
-        <button class="cp" tabindex="-1">Copy</button>
+        <div class="code-row">
+          <span id="jscmd">copy(JSON.stringify({t:JSON.parse(localStorage.getItem("userToken")).value,c:document.cookie}))</span>
+          <button class="cp" tabindex="-1">Copy</button>
+        </div>
       </div>
       <p style="margin-top:7px">This copies your credentials to clipboard.</p>
     </div>
@@ -491,6 +590,7 @@ hr{border:none;border-top:1px solid #1e1e1e;margin:28px 0}
   </div>
 
   <button class="btn" id="btn" onclick="connect()">Connect</button>
+  <button class="btn-auto" id="abtn" onclick="autoDetect()">⚡ Auto-detect from browser</button>
   <div class="status" id="st"></div>
 </div>
 
@@ -532,6 +632,22 @@ async function connect(){
     st.className='status err';
     btn.disabled=false; btn.textContent='Connect';
   }
+}
+
+async function autoDetect(){
+  const st=document.getElementById('st'), ab=document.getElementById('abtn');
+  ab.disabled=true; ab.textContent='Detecting…'; st.textContent='';
+  try{
+    const r=await fetch('/auto-cookies',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d=await r.json();
+    if(d.ok && d.token){
+      document.getElementById('inp').value=JSON.stringify({t:d.token,c:Object.entries(d.cookies).map(([k,v])=>k+'='+v).join('; ')});
+      st.textContent='✓ Cookies found — press Connect.'; st.className='status ok';
+    } else {
+      st.textContent='No DeepSeek cookies found — log in first, then try again.'; st.className='status err';
+    }
+  } catch(e){ st.textContent='Error: '+e.message; st.className='status err'; }
+  ab.disabled=false; ab.textContent='⚡ Auto-detect from browser';
 }
 
 window.open('https://chat.deepseek.com','_blank');
@@ -608,6 +724,20 @@ def _login_via_html(cfg: dict) -> tuple:
             self.wfile.write(body)
 
         def do_POST(self):
+            if self.path == "/auto-cookies":
+                cookies = _find_browser_cookies()
+                token   = cookies.get("userToken", cookies.get("Authorization", ""))
+                # try to pull token from userToken cookie (often a JSON blob)
+                if token.startswith("{"):
+                    try: token = json.loads(token).get("value", token)
+                    except: pass
+                resp = json.dumps({"ok": bool(cookies), "cookies": cookies,
+                                   "token": token}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers(); self.wfile.write(resp); return
+
             if self.path != "/callback":
                 self.send_response(404); self.end_headers(); return
             length = int(self.headers.get("Content-Length", 0))
