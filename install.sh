@@ -158,7 +158,7 @@ fi
 # ── done ──────────────────────────────────────────────────────────────────────
 HL="\033[38;5;75m"
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null
-printf "\r\033[K\n  ${GREEN}✓${R}  DeepSeek Code installed\n\n"
+printf "\r\033[K  ${GREEN}✓${R}  DeepSeek Code installed\n\n"
 
 case ":$PATH:" in
     *":$BIN_DIR:"*)
