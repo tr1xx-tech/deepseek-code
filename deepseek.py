@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.3"
+VERSION   = "0.4"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1198,6 +1198,201 @@ def _show_update_page(new_ver):
         _exit_app()
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
+# ── command autocomplete definitions ─────────────────────────────────────────
+_CMDS = [
+    ("/model flash",  "switch to deepseek-v4-flash  (fast, default)"),
+    ("/model pro",    "switch to deepseek-v4-pro  (smarter)"),
+    ("/model r1",     "switch to deepseek-r1  (reasoning)"),
+    ("/new",          "start a new chat"),
+    ("/chats",        "list all chats"),
+    ("/chat",         "switch to chat by number"),
+    ("/delete",       "delete current or nth chat"),
+    ("/cwd",          "change working directory"),
+    ("/login",        "re-authenticate"),
+    ("/search",       "toggle web search on/off"),
+    ("/thinking",     "toggle r1 reasoning trace"),
+    ("/confirm",      "toggle shell confirmation"),
+    ("/status",       "show current settings"),
+    ("/help",         "show help page"),
+    ("/exit",         "quit"),
+]
+
+def _highlight_match(text: str, query: str) -> str:
+    """Bold-highlight the matched part of text."""
+    if not query:
+        return c(DIM, text)
+    lo = text.lower()
+    idx = lo.find(query.lower())
+    if idx == -1:
+        return c(DIM, text)
+    return (c(DIM, text[:idx]) +
+            c(BCYAN+BOLD, text[idx:idx+len(query)]) +
+            c(DIM, text[idx+len(query):]))
+
+def _prompt_with_autocomplete(prompt_str: str) -> str:
+    """
+    Reads a line with live / autocomplete dropdown drawn below the prompt.
+    Falls back to plain input() when not a real tty or termios unavailable.
+    """
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return input(prompt_str)
+    try:
+        import termios, tty as _tty_mod
+    except ImportError:
+        return input(prompt_str)
+
+    fd   = sys.stdin.fileno()
+    old  = termios.tcgetattr(fd)
+    buf  = []          # list of chars
+    sel  = -1          # selected menu index (-1 = none)
+    menu_lines = 0     # how many lines the dropdown currently occupies
+
+    W = _cols()
+
+    def matches(text):
+        if not text.startswith("/"):
+            return []
+        q = text[1:].lower()
+        if not q:
+            return list(_CMDS)
+        # startswith first, then description keyword match
+        starts = [(cmd, desc) for cmd, desc in _CMDS if cmd[1:].lower().startswith(q)]
+        in_desc = [(cmd, desc) for cmd, desc in _CMDS
+                   if (cmd, desc) not in starts and q in desc.lower()]
+        return starts + in_desc
+
+    def clear_menu():
+        nonlocal menu_lines
+        if menu_lines:
+            sys.stdout.write(f"\033[{menu_lines}B" + "\r\033[J")
+            sys.stdout.write(f"\033[{menu_lines}A")
+            sys.stdout.flush()
+            menu_lines = 0
+
+    def draw_menu(text, selected):
+        nonlocal menu_lines
+        clear_menu()
+        hits = matches(text)
+        if not hits:
+            return
+        q = text[1:] if text.startswith("/") else ""
+        rows = []
+        for i, (cmd, desc) in enumerate(hits[:8]):
+            # highlight matched part in command
+            cmd_hl  = _highlight_match(cmd, "/" + q if q else "")
+            # highlight matched word in description
+            desc_hl = _highlight_match(desc, q)
+            prefix  = c(BCYAN+BOLD, " ❯ ") if i == selected else "   "
+            line    = f"{prefix}{cmd_hl}  {desc_hl}"
+            # pad / truncate to terminal width
+            vl  = _vis_len(line)
+            pad = " " * max(0, W - vl - 1)
+            rows.append(line + pad)
+        out = "\n" + "\n".join(rows)
+        sys.stdout.write(out)
+        sys.stdout.flush()
+        menu_lines = len(rows) + 1   # +1 for the leading \n
+        # move cursor back up to input line
+        sys.stdout.write(f"\033[{menu_lines}A")
+        sys.stdout.flush()
+
+    def redraw_input(text):
+        sys.stdout.write(f"\r\033[K{prompt_str}{text}")
+        sys.stdout.flush()
+
+    sys.stdout.write(prompt_str)
+    sys.stdout.flush()
+
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN,
+                          termios.tcgetattr(fd))
+        _tty_mod.setraw(fd)
+
+        while True:
+            ch = os.read(fd, 1)
+
+            # escape sequences (arrows, etc.)
+            if ch == b'\x1b':
+                seq = os.read(fd, 2)
+                if seq == b'[A':   # up arrow
+                    hits = matches("".join(buf))
+                    if hits:
+                        sel = max(0, (sel - 1) % len(hits[:8]))
+                        redraw_input("".join(buf))
+                        draw_menu("".join(buf), sel)
+                elif seq == b'[B': # down arrow
+                    hits = matches("".join(buf))
+                    if hits:
+                        sel = (sel + 1) % len(hits[:8])
+                        redraw_input("".join(buf))
+                        draw_menu("".join(buf), sel)
+                continue
+
+            # enter
+            if ch in (b'\r', b'\n'):
+                text = "".join(buf)
+                hits = matches(text)
+                if sel >= 0 and hits and sel < len(hits):
+                    text = hits[sel][0]
+                clear_menu()
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return text
+
+            # ctrl-c / ctrl-d
+            if ch == b'\x03':
+                clear_menu()
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                raise KeyboardInterrupt
+            if ch == b'\x04':
+                clear_menu()
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                raise EOFError
+
+            # tab — complete first match
+            if ch == b'\t':
+                hits = matches("".join(buf))
+                if hits:
+                    sel = 0 if sel < 0 else sel
+                    buf = list(hits[sel][0])
+                    sel = 0
+                    redraw_input("".join(buf))
+                    draw_menu("".join(buf), sel)
+                continue
+
+            # backspace
+            if ch in (b'\x7f', b'\x08'):
+                if buf:
+                    buf.pop()
+                    sel = -1
+                    redraw_input("".join(buf))
+                    text = "".join(buf)
+                    if text.startswith("/"):
+                        draw_menu(text, sel)
+                    else:
+                        clear_menu()
+                continue
+
+            # printable char
+            try:
+                char = ch.decode('utf-8')
+            except UnicodeDecodeError:
+                continue
+            buf.append(char)
+            sel = -1
+            redraw_input("".join(buf))
+            text = "".join(buf)
+            if text.startswith("/"):
+                draw_menu(text, sel)
+            else:
+                clear_menu()
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def _help_box():
     def row(cmd, desc, w=22):
         pad = " " * max(0, w - _vis_len(cmd))
@@ -1419,7 +1614,7 @@ def main():
 
         while True:
             try:
-                line = input(f"{c(BBLUE+BOLD, '❯')} ").strip()
+                line = _prompt_with_autocomplete(f"{c(BBLUE+BOLD, '❯')} ").strip()
             except (KeyboardInterrupt, EOFError):
                 print(f"\n{c(DIM, 'bye')}")
                 break
