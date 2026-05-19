@@ -5,8 +5,8 @@
 RAW="https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 if [ -t 1 ]; then
-    R="\033[0m" BOLD="\033[1m" DIM="\033[2m"
-    GREEN="\033[32m" CYAN="\033[36m" RED="\033[31m"
+    R="\033[0m" BOLD="\033[1m" DIM="\033[38;5;245m"
+    GREEN="\033[38;5;35m" CYAN="\033[38;5;33m" RED="\033[38;5;196m"
 else
     R="" BOLD="" DIM="" GREEN="" CYAN="" RED=""
 fi
