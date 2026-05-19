@@ -18,7 +18,7 @@ die() {
 }
 
 IS_TERMUX=0
-[ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ] && IS_TERMUX=1
+{ [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; } && IS_TERMUX=1
 
 if [ "$IS_TERMUX" = "1" ]; then
     SHARE_DIR="$PREFIX/share/deepseek"
@@ -133,8 +133,6 @@ has_pkg curl_cffi || {
     has_pkg curl_cffi || { pip_install requests; has_pkg requests || die "could not install curl_cffi or requests"; }
 }
 
-[ "$IS_TERMUX" = "0" ] && { has_pkg nodriver || pip_install nodriver; }
-
 # ── write ~/.local/bin/deepseek & dsk ────────────────────────────────────────
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/deepseek" << EOF
@@ -160,6 +158,16 @@ fi
 # ── done ──────────────────────────────────────────────────────────────────────
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null
 printf "\r\033[K  ${GREEN}✓${R}  ${BOLD}complete${R}\n"
-sleep 0.6
-clear
-exec "$BIN_DIR/deepseek" "$@" </dev/tty
+
+# Check if BIN_DIR is in current PATH
+case ":$PATH:" in
+    *":$BIN_DIR:"*)
+        sleep 0.4
+        clear
+        exec "$BIN_DIR/deepseek" "$@" </dev/tty
+        ;;
+    *)
+        printf "\n  ${DIM}Run this to activate, then use ${R}${BOLD}dsk${R}${DIM}:${R}\n"
+        printf "  ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
+        ;;
+esac
