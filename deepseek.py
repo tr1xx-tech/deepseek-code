@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.50"
+VERSION   = "0.51"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -834,8 +834,7 @@ class Agent:
                     pad = max(0, W - len(ln))
                     print(f"{BG_U}{FG_U}{ln}{' ' * pad}{R}")
             else:
-                icon = c(DBLUE, "○")
-                print(f"{icon} {AI_COL}{text}{R}")
+                print(f"{c(DBLUE, '●')} {AI_COL}{text.replace(chr(10), chr(10) + '  ')}{R}")
         print()
 
     def _stream(self, prompt: str) -> str:
@@ -863,10 +862,9 @@ class Agent:
                         print(f"\n{dim('╰────────────────────────────')}\n", flush=True)
                         in_think = False
                     if first_text and content:
-                        icon = c(DBLUE, "○")
-                        print(f"{icon} ", end="", flush=True)
+                        print(f"{c(DBLUE, '●')} ", end="", flush=True)
                         first_text = False
-                    print(c("\033[38;5;75m", content), end="", flush=True)
+                    print(c("\033[38;5;75m", content.replace("\n", "\n  ")), end="", flush=True)
                     buf.append(content)
                 elif kind == "title":
                     self.chat_title = content
