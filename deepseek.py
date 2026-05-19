@@ -1200,7 +1200,7 @@ def _cls():
 def _vis_len(s: str) -> int:
     return len(re.sub(r'\033\[[^m]*m', '', s))
 
-def _box(lines, title=""):
+def _box(lines, title="", close=True):
     cols = _cols()
     W    = max(40, cols)
     d    = W - 2
@@ -1217,7 +1217,8 @@ def _box(lines, title=""):
         vl  = _vis_len(ln)
         pad = " " * max(0, cw - vl)
         rows.append(c(BCYAN, "│") + " " + ln + pad + " " + c(BCYAN, "│"))
-    rows.append(c(BCYAN, "╰" + "─" * d + "╯"))
+    if close:
+        rows.append(c(BCYAN, "╰" + "─" * d + "╯"))
     return "\n".join(rows)
 
 def _sep(label=""):
@@ -1276,15 +1277,16 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
 
 def _show_welcome(cfg, chat_id, chat_title, user_name=""):
     _cls()
-    # Store render function for live SIGWINCH redraws
+    _set_scroll_region()
     def _render():
         cols = _cols()
         return ("\n" +
                 _box(_welcome_lines(cfg, chat_id, chat_title, user_name),
-                     title=f"DeepSeek Code  v{VERSION}") +
+                     title=f"DeepSeek Code  v{VERSION}", close=False) +
                 "\n")
     _live_state["fn"] = _render
     print(_render(), end="", flush=True)
+    _draw_input_field()
 
 def _manual_update():
     """Check for update on demand (/update command)."""
