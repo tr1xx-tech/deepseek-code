@@ -17,9 +17,9 @@ from typing import Generator
 # ─────────────────────────────────────────────────────────────────────────────
 R, BOLD, DIM, ITALIC = "\033[0m", "\033[1m", "\033[38;5;245m", "\033[3m"
 CYAN, GREEN, YELLOW, RED, BLUE = "\033[38;5;44m", "\033[38;5;35m", "\033[38;5;220m", "\033[38;5;196m", "\033[38;5;33m"
-BCYAN = "\033[38;5;51m"   # true cyan  (256-color, SSH-safe)
-BBLUE = "\033[38;5;75m"   # true blue  (256-color, SSH-safe)
-DBLUE = "\033[38;5;27m"   # deep blue
+BCYAN = "\033[38;5;38m"   # dark cyan  (256-color, SSH-safe)
+BBLUE = "\033[38;5;26m"   # dark blue  (256-color, SSH-safe)
+DBLUE = "\033[38;5;18m"   # deep blue
 def c(col, t): return f"{col}{t}{R}"
 def bold(t):   return c(BOLD, t)
 def dim(t):    return c(DIM, t)
@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "1.0.13"
+VERSION   = "1.0.14"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1154,8 +1154,8 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
     else:
         try:    uname = getpass.getuser()
         except: uname = os.environ.get("USER") or os.environ.get("USERNAME") or "there"
-    av1 = c(BCYAN+BOLD, "█████")
-    av2 = c(BCYAN+BOLD, "█") + c(BCYAN, "· ·") + c(BCYAN+BOLD, "█")
+    av1 = c(BCYAN+BOLD, "▐██▛███████▌")
+    av2 = c(BCYAN+BOLD, "▐██████████▌")
     return [
         "",
         f"  {av1}  {bold('Welcome back, ' + uname + '!')}",
