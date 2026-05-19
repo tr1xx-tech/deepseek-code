@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.43"
+VERSION   = "0.44"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1199,30 +1199,31 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         wrows  = _wrap_rows(text, cols)
         new_lc = len(wrows)
         old_lc = prev_rows[0]
-        out    = []
-        # go up to first row of prompt
+        # total rows to clear: old text rows + old bottom bar
+        total_old = old_lc + 1
+        out = []
+        # go up to first text row
         if old_lc > 1:
             out.append(f"\033[{old_lc - 1}A")
-        # clear old rows
+        # clear all old rows including old bottom bar
         out.append("\r\033[K")
-        for _ in range(old_lc - 1):
+        for _ in range(total_old - 1):
             out.append("\033[1B\r\033[K")
-        if old_lc > 1:
-            out.append(f"\033[{old_lc - 1}A")
-        # print first row
+        # back to first text row
+        out.append(f"\033[{total_old - 1}A")
+        # print text rows
         out.append(f"\r{PR}{wrows[0]}")
-        # continuation rows
         for row in wrows[1:]:
             out.append(f"\r\n{IND}{row}")
-        # clear extra rows from previous longer text
-        for _ in range(old_lc - new_lc):
-            out.append(f"\033[1B\r\033[K")
-        if old_lc - new_lc > 0:
-            out.append(f"\033[{old_lc - new_lc}A")
-        # redraw bottom bar (always 1 row below last text row)
+        # draw bottom bar right below last text row
         out.append(f"\033[1B\r\033[K{_bar()}")
-        # return cursor to last text row
-        out.append("\033[1A")
+        # return cursor to last text row, position after typed text
+        last_row = wrows[-1]
+        if new_lc == 1:
+            col = 2 + len(last_row)   # ❯ + space + text
+        else:
+            col = len(IND) + len(last_row)
+        out.append(f"\033[1A\r\033[{col}C")
         prev_rows[0] = new_lc
         _flush("".join(out))
 
