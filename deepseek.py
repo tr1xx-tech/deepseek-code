@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.7"
+VERSION   = "0.8"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1099,7 +1099,78 @@ class Agent:
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
-_MNAMES = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro", "r1": "deepseek-r1"}
+_MNAMES  = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro", "r1": "deepseek-r1"}
+_MODELS  = [
+    ("flash", "DeepSeek V4 Flash",  "fast · default"),
+    ("pro",   "DeepSeek V4 Pro",    "smarter · slower"),
+    ("r1",    "DeepSeek R1",        "reasoning · thinking mode"),
+]
+
+def _pick_model(current: str) -> str | None:
+    """Interactive arrow-key model picker. Returns chosen key or None if cancelled."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return None
+    try:
+        import termios, tty as _tty_mod
+    except ImportError:
+        return None
+
+    fd       = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+    keys     = [m[0] for m in _MODELS]
+    sel      = keys.index(current) if current in keys else 0
+    H        = len(_MODELS) + 2   # menu height: separator + items + separator
+
+    def _flush(s: str):
+        sys.stdout.write(s); sys.stdout.flush()
+
+    def _render():
+        W = _cols()
+        # go to top of block
+        _flush(f"\033[{H}A\r")
+        # separator line
+        _flush(f"\033[K{c(DBLUE, '── model ' + '─' * max(0, W - 9))}\n\r")
+        for i, (key, name, desc) in enumerate(_MODELS):
+            is_sel = (i == sel)
+            if is_sel:
+                row = f" {c(BCYAN+BOLD,'❯')} {c(BCYAN+BOLD, name)}  {c(BCYAN, desc)}"
+            else:
+                row = f"   {c(DIM, name)}  {c(DIM, desc)}"
+            vl  = _vis_len(row)
+            row += " " * max(0, W - vl - 1)
+            _flush(f"\033[K{row}\n\r")
+        _flush(f"\033[K{c(DBLUE, '─' * max(0, W - 1))}")
+
+    # reserve block
+    _flush("\n" * H)
+    _render()
+
+    try:
+        _tty_mod.setraw(fd)
+        while True:
+            ch = os.read(fd, 1)
+            if ch == b'\x1b':
+                try:    seq = os.read(fd, 2)
+                except: seq = b''
+                if seq == b'[A':   sel = (sel - 1) % len(_MODELS)
+                elif seq == b'[B': sel = (sel + 1) % len(_MODELS)
+                _render()
+                continue
+            if ch in (b'\r', b'\n'):
+                # erase block
+                _flush(f"\033[{H}A\r")
+                for _ in range(H):
+                    _flush("\033[2K\n")
+                _flush(f"\033[{H}A\r\033[K")
+                return keys[sel]
+            if ch in (b'\x03', b'\x04', b'\x1b', b'q'):
+                _flush(f"\033[{H}A\r")
+                for _ in range(H):
+                    _flush("\033[2K\n")
+                _flush(f"\033[{H}A\r\033[K")
+                return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
 
 def _tty():  return sys.stdout.isatty()
@@ -1254,9 +1325,7 @@ def _show_update_page(new_ver):
 
 # ── command autocomplete definitions ─────────────────────────────────────────
 _CMDS = [
-    ("/model flash",  "switch to deepseek-v4-flash  (fast, default)"),
-    ("/model pro",    "switch to deepseek-v4-pro  (smarter)"),
-    ("/model r1",     "switch to deepseek-r1  (reasoning)"),
+    ("/model",         "choose model"),
     ("/new",          "start a new chat"),
     ("/chats",        "list all chats"),
     ("/chat",         "switch to chat by number"),
@@ -1462,9 +1531,7 @@ def _help_box():
         return f"\n  {c(BBLUE+BOLD, name)}"
     return _box([
         sec("model"),
-        row("/model flash",  "deepseek-v4-flash  · fast, default"),
-        row("/model pro",    "deepseek-v4-pro    · smarter"),
-        row("/model r1",     "deepseek-r1        · reasoning"),
+        row("/model",        "choose model interactively"),
         sec("chat"),
         row("/new",          "start a new chat"),
         row("/chats",        "list all chats"),
@@ -1736,9 +1803,16 @@ def main():
                     print(f"  {c(GREEN,'✓')}  {c(DIM, 'logged in')}")
 
                 elif cmd == "model":
-                    if arg in ("flash","pro","r1"):
+                    if arg in ("flash", "pro", "r1"):
                         cfg["model"] = arg; save_cfg(cfg)
-                    print(f"  {c(BCYAN+BOLD, _MNAMES.get(cfg['model'], cfg['model']))}")
+                        mn = next(n for k,n,_ in _MODELS if k==arg)
+                        print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
+                    else:
+                        chosen = _pick_model(cfg["model"])
+                        if chosen:
+                            cfg["model"] = chosen; save_cfg(cfg)
+                            mn = next(n for k,n,_ in _MODELS if k==chosen)
+                            print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
 
                 elif cmd == "thinking":
                     v = toggle("thinking", arg)
