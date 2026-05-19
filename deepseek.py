@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.42"
+VERSION   = "0.43"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1219,6 +1219,10 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             out.append(f"\033[1B\r\033[K")
         if old_lc - new_lc > 0:
             out.append(f"\033[{old_lc - new_lc}A")
+        # redraw bottom bar (always 1 row below last text row)
+        out.append(f"\033[1B\r\033[K{_bar()}")
+        # return cursor to last text row
+        out.append("\033[1A")
         prev_rows[0] = new_lc
         _flush("".join(out))
 
