@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.47"
+VERSION   = "0.48"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1366,7 +1366,26 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         out.append(f"\033[{MENU_H + 1}A\r\033[{_pr_len()}C")
         _flush("".join(out))
 
-    menu_open = False
+    menu_open  = False
+    ctrlc_once = [False]
+    _ctrlc_timer = [None]
+
+    def _show_ctrlc_hint():
+        _flush(f"\033[1B\r\033[K  {c(DIM, 'press ctrl+c again to exit')}\033[1A\r\033[{2 + len(''.join(buf))}C")
+
+    def _clear_ctrlc_hint():
+        _flush(f"\033[1B\r\033[K{_bar()}\033[1A\r\033[{2 + len(''.join(buf))}C")
+
+    def _arm_ctrlc_clear():
+        if _ctrlc_timer[0]:
+            _ctrlc_timer[0].cancel()
+        def _expire():
+            ctrlc_once[0] = False
+            _clear_ctrlc_hint()
+        t = threading.Timer(3.0, _expire)
+        t.daemon = True
+        t.start()
+        _ctrlc_timer[0] = t
 
     def _done(text: str):
         BG   = "\033[48;5;238m"
@@ -1396,6 +1415,11 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         _tty_mod.setraw(fd)
         while True:
             ch = os.read(fd, 1)
+
+            if ch != b'\x03' and ctrlc_once[0]:
+                ctrlc_once[0] = False
+                if _ctrlc_timer[0]: _ctrlc_timer[0].cancel()
+                _clear_ctrlc_hint()
 
             if ch == b'\x1b':
                 try:    seq = os.read(fd, 2)
@@ -1430,7 +1454,13 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
 
             if ch == b'\x03':
                 if menu_open: _clear_menu(""); menu_open = False
-                _done(""); raise KeyboardInterrupt
+                if ctrlc_once[0]:
+                    if _ctrlc_timer[0]: _ctrlc_timer[0].cancel()
+                    _done(""); raise KeyboardInterrupt
+                ctrlc_once[0] = True
+                _show_ctrlc_hint()
+                _arm_ctrlc_clear()
+                continue
             if ch == b'\x04':
                 if menu_open: _clear_menu(""); menu_open = False
                 _done(""); raise EOFError
@@ -1475,6 +1505,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                 _redraw(text)
 
     finally:
+        if _ctrlc_timer[0]: _ctrlc_timer[0].cancel()
         sys.stdout.write("\033[?7h\033[?25h"); sys.stdout.flush()  # restore autowrap
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
@@ -1780,24 +1811,13 @@ def main():
         def _bar():
             return c(DBLUE, "─" * _cols())
 
-        _ctrlc = [0]
         while True:
             try:
                 line = _prompt_with_autocomplete().strip()
-                _ctrlc[0] = 0
-            except EOFError:
+            except (KeyboardInterrupt, EOFError):
                 print(f"\n{c(DIM, 'bye')}")
                 break
-            except KeyboardInterrupt:
-                _ctrlc[0] += 1
-                if _ctrlc[0] >= 2:
-                    print(f"\n{c(DIM, 'bye')}")
-                    break
-                print(f"\n{c(DIM, 'press ctrl+c again to exit')}")
-                continue
-            if not line:
-                _ctrlc[0] = 0
-                continue
+            if not line: continue
 
             if line.startswith("/"):
                 parts = line[1:].split(maxsplit=1)
