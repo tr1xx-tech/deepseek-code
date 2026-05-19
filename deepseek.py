@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.5"
+VERSION   = "0.6"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1272,12 +1272,21 @@ _CMDS = [
     ("/exit",         "quit"),
 ]
 
-def _highlight_match(text: str, query: str) -> str:
-    """Bold-highlight the matched part of text."""
+def _cmd_matches(text: str):
+    if not text.startswith("/"):
+        return []
+    q = text[1:].lower()
+    if not q:
+        return list(_CMDS)
+    starts  = [(cmd, desc) for cmd, desc in _CMDS if cmd[1:].lower().startswith(q)]
+    in_desc = [(cmd, desc) for cmd, desc in _CMDS
+               if (cmd, desc) not in starts and q in desc.lower()]
+    return starts + in_desc
+
+def _hl(text: str, query: str) -> str:
     if not query:
         return c(DIM, text)
-    lo = text.lower()
-    idx = lo.find(query.lower())
+    idx = text.lower().find(query.lower())
     if idx == -1:
         return c(DIM, text)
     return (c(DIM, text[:idx]) +
@@ -1285,10 +1294,6 @@ def _highlight_match(text: str, query: str) -> str:
             c(DIM, text[idx+len(query):]))
 
 def _prompt_with_autocomplete(prompt_str: str) -> str:
-    """
-    Reads a line with live / autocomplete dropdown drawn below the prompt.
-    Falls back to plain input() when not a real tty or termios unavailable.
-    """
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         return input(prompt_str)
     try:
@@ -1296,156 +1301,133 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
     except ImportError:
         return input(prompt_str)
 
-    fd   = sys.stdin.fileno()
-    old  = termios.tcgetattr(fd)
-    buf  = []          # list of chars
-    sel  = -1          # selected menu index (-1 = none)
-    menu_lines = 0     # how many lines the dropdown currently occupies
+    fd       = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+    buf      = []
+    sel      = -1
+    drawn    = 0   # number of menu lines currently on screen below cursor
 
-    W = _cols()
+    def _flush(s: str):
+        sys.stdout.write(s); sys.stdout.flush()
 
-    def matches(text):
-        if not text.startswith("/"):
-            return []
-        q = text[1:].lower()
-        if not q:
-            return list(_CMDS)
-        # startswith first, then description keyword match
-        starts = [(cmd, desc) for cmd, desc in _CMDS if cmd[1:].lower().startswith(q)]
-        in_desc = [(cmd, desc) for cmd, desc in _CMDS
-                   if (cmd, desc) not in starts and q in desc.lower()]
-        return starts + in_desc
+    def _erase_menu():
+        nonlocal drawn
+        if not drawn:
+            return
+        # move down to last menu line, then erase upward back to input line
+        _flush(f"\033[{drawn}B")
+        for _ in range(drawn):
+            _flush("\r\033[2K\033[A")
+        drawn = 0
 
-    def clear_menu():
-        nonlocal menu_lines
-        if menu_lines:
-            sys.stdout.write(f"\033[{menu_lines}B" + "\r\033[J")
-            sys.stdout.write(f"\033[{menu_lines}A")
-            sys.stdout.flush()
-            menu_lines = 0
-
-    def draw_menu(text, selected):
-        nonlocal menu_lines
-        clear_menu()
-        hits = matches(text)
+    def _draw_menu(text: str, selected: int):
+        nonlocal drawn
+        _erase_menu()
+        hits = _cmd_matches(text)
         if not hits:
             return
-        q = text[1:] if text.startswith("/") else ""
-        rows = []
-        for i, (cmd, desc) in enumerate(hits[:8]):
-            # highlight matched part in command
-            cmd_hl  = _highlight_match(cmd, "/" + q if q else "")
-            # highlight matched word in description
-            desc_hl = _highlight_match(desc, q)
-            prefix  = c(BCYAN+BOLD, " ❯ ") if i == selected else "   "
-            line    = f"{prefix}{cmd_hl}  {desc_hl}"
-            # pad / truncate to terminal width
-            vl  = _vis_len(line)
-            pad = " " * max(0, W - vl - 1)
-            rows.append(line + pad)
-        out = "\n" + "\n".join(rows)
-        sys.stdout.write(out)
-        sys.stdout.flush()
-        menu_lines = len(rows) + 1   # +1 for the leading \n
-        # move cursor back up to input line
-        sys.stdout.write(f"\033[{menu_lines}A")
-        sys.stdout.flush()
+        q   = text[1:] if text.startswith("/") else ""
+        W   = _cols()
+        out = []
+        for i, (cmd, desc) in enumerate(hits[:7]):
+            cmd_hl  = _hl(cmd,  "/" + q if q else "")
+            desc_hl = _hl(desc, q)
+            marker  = c(BCYAN+BOLD, "❯") if i == selected else " "
+            line    = f" {marker} {cmd_hl}  {desc_hl}"
+            vl      = _vis_len(line)
+            line   += " " * max(0, W - vl - 1)
+            out.append(line)
+        _flush("\n" + "\n".join(out))
+        # move cursor back up: len(out) lines of menu + 1 for the leading \n
+        _flush(f"\033[{len(out) + 1}A\r")
+        # reposition after prompt
+        _flush(prompt_str + "".join(buf))
+        drawn = len(out) + 1
 
-    def redraw_input(text):
-        sys.stdout.write(f"\r\033[K{prompt_str}{text}")
-        sys.stdout.flush()
+    def _redraw_input():
+        _flush(f"\r\033[K{prompt_str}{''.join(buf)}")
 
-    sys.stdout.write(prompt_str)
-    sys.stdout.flush()
-
+    _flush(prompt_str)
     try:
-        termios.tcsetattr(fd, termios.TCSADRAIN,
-                          termios.tcgetattr(fd))
         _tty_mod.setraw(fd)
-
         while True:
             ch = os.read(fd, 1)
 
-            # escape sequences (arrows, etc.)
             if ch == b'\x1b':
-                seq = os.read(fd, 2)
-                if seq == b'[A':   # up arrow
-                    hits = matches("".join(buf))
+                # read escape sequence — may be 1 or 2 more bytes
+                try:
+                    import fcntl, termios as _t2
+                    seq = os.read(fd, 2)
+                except Exception:
+                    seq = b''
+                if seq == b'[A':          # up
+                    hits = _cmd_matches("".join(buf))
                     if hits:
-                        sel = max(0, (sel - 1) % len(hits[:8]))
-                        redraw_input("".join(buf))
-                        draw_menu("".join(buf), sel)
-                elif seq == b'[B': # down arrow
-                    hits = matches("".join(buf))
+                        n   = len(hits[:7])
+                        sel = (sel - 1) % n if sel > 0 else 0
+                        _redraw_input()
+                        _draw_menu("".join(buf), sel)
+                elif seq == b'[B':        # down
+                    hits = _cmd_matches("".join(buf))
                     if hits:
-                        sel = (sel + 1) % len(hits[:8])
-                        redraw_input("".join(buf))
-                        draw_menu("".join(buf), sel)
+                        n   = len(hits[:7])
+                        sel = (sel + 1) % n
+                        _redraw_input()
+                        _draw_menu("".join(buf), sel)
                 continue
 
-            # enter
             if ch in (b'\r', b'\n'):
                 text = "".join(buf)
-                hits = matches(text)
-                if sel >= 0 and hits and sel < len(hits):
+                hits = _cmd_matches(text)
+                if 0 <= sel < len(hits):
                     text = hits[sel][0]
-                clear_menu()
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+                _erase_menu()
+                _flush("\n")
                 return text
 
-            # ctrl-c / ctrl-d
             if ch == b'\x03':
-                clear_menu()
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+                _erase_menu(); _flush("\n")
                 raise KeyboardInterrupt
             if ch == b'\x04':
-                clear_menu()
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+                _erase_menu(); _flush("\n")
                 raise EOFError
 
-            # tab — complete first match
             if ch == b'\t':
-                hits = matches("".join(buf))
+                hits = _cmd_matches("".join(buf))
                 if hits:
-                    sel = 0 if sel < 0 else sel
-                    buf = list(hits[sel][0])
-                    sel = 0
-                    redraw_input("".join(buf))
-                    draw_menu("".join(buf), sel)
+                    sel  = max(sel, 0)
+                    buf  = list(hits[sel][0])
+                    _redraw_input()
+                    _draw_menu("".join(buf), sel)
                 continue
 
-            # backspace
             if ch in (b'\x7f', b'\x08'):
                 if buf:
                     buf.pop()
                     sel = -1
-                    redraw_input("".join(buf))
-                    text = "".join(buf)
-                    if text.startswith("/"):
-                        draw_menu(text, sel)
+                    _redraw_input()
+                    if "".join(buf).startswith("/"):
+                        _draw_menu("".join(buf), sel)
                     else:
-                        clear_menu()
+                        _erase_menu()
                 continue
 
-            # printable char
             try:
                 char = ch.decode('utf-8')
             except UnicodeDecodeError:
                 continue
+            if char < ' ' and char not in ('\t',):
+                continue
             buf.append(char)
             sel = -1
-            redraw_input("".join(buf))
-            text = "".join(buf)
-            if text.startswith("/"):
-                draw_menu(text, sel)
+            _redraw_input()
+            if "".join(buf).startswith("/"):
+                _draw_menu("".join(buf), sel)
             else:
-                clear_menu()
+                _erase_menu()
 
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
 
 def _help_box():
