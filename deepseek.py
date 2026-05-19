@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.4"
+VERSION   = "0.5"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1179,6 +1179,60 @@ def _show_welcome(cfg, chat_id, chat_title, user_name=""):
     _live_state["fn"] = _render
     print(_render(), end="")
 
+def _manual_update():
+    """Check for update on demand (/update command)."""
+    frames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
+    done   = [False]
+    remote = [None]
+
+    def _fetch():
+        try:
+            req = urllib.request.Request(f"{_RAW_BASE}/VERSION",
+                                         headers={"User-Agent": "deepseek/1.0"})
+            remote[0] = urllib.request.urlopen(req, timeout=6).read().decode().strip()
+        except Exception as e:
+            remote[0] = f"ERROR:{e}"
+        done[0] = True
+
+    t = threading.Thread(target=_fetch, daemon=True)
+    t.start()
+    i = 0
+    while not done[0]:
+        sys.stdout.write(f"\r  {c(BCYAN, frames[i % len(frames)])}  {c(DIM, 'checking...')}")
+        sys.stdout.flush()
+        time.sleep(0.08)
+        i += 1
+    sys.stdout.write("\r\033[K")
+    sys.stdout.flush()
+
+    rv = remote[0]
+    if rv is None or (rv and rv.startswith("ERROR:")):
+        err = rv[6:] if rv else "timeout"
+        print(f"  {c(RED, '✗')}  {c(DIM, str(err))}")
+        return
+
+    if rv == VERSION:
+        print(f"  {c(GREEN+BOLD, '✓')}  {c(DIM, 'already up to date')}  {c(DIM, VERSION)}")
+        return
+
+    # newer version available — download and offer restart
+    try:
+        sys.stdout.write(f"  {c(BCYAN, '↓')}  {c(DIM, 'downloading ' + rv + '...')}")
+        sys.stdout.flush()
+        req2    = urllib.request.Request(f"{_RAW_BASE}/deepseek.py",
+                                          headers={"User-Agent": "deepseek/1.0"})
+        new_src = urllib.request.urlopen(req2, timeout=15).read()
+        Path(__file__).resolve().write_bytes(new_src)
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+    except Exception as e:
+        sys.stdout.write("\r\033[K")
+        print(f"  {c(RED, '✗')}  download failed: {c(DIM, str(e))}")
+        return
+
+    _show_update_page(rv)
+
+
 def _show_update_page(new_ver):
     _cls()
     print()
@@ -1213,6 +1267,7 @@ _CMDS = [
     ("/thinking",     "toggle r1 reasoning trace"),
     ("/confirm",      "toggle shell confirmation"),
     ("/status",       "show current settings"),
+    ("/update",        "check for updates"),
     ("/help",         "show help page"),
     ("/exit",         "quit"),
 ]
@@ -1417,6 +1472,7 @@ def _help_box():
         row("/confirm",      "toggle shell confirmation"),
         row("/status",       "show current settings"),
         sec("other"),
+        row("/update",       "check for updates"),
         row("/help",         "this page"),
         row("/exit",         "quit"),
         "",
@@ -1627,6 +1683,11 @@ def main():
 
                 if cmd == "exit":
                     print(c(DIM, "bye")); break
+
+                elif cmd == "update":
+                    print()
+                    _manual_update()
+                    print()
 
                 elif cmd == "help":
                     _cls(); print(); print(_help_box()); print()
