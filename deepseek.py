@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.2"
+VERSION   = "0.3"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -338,7 +338,8 @@ class DeepSeekClient:
     def _pow_response(self) -> str:
         r   = self._post("/chat/create_pow_challenge",
                          {"target_path": "/api/v0/chat/completion"})
-        cfg = r.json()["data"]["biz_data"]
+        biz = r.json()["data"]["biz_data"]
+        cfg = biz.get("challenge", biz)
         return self._pow.solve(cfg)
 
     def create_session(self) -> str:
