@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.14"
+VERSION   = "0.15"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1351,7 +1351,7 @@ _CMDS = [
     ("/exit",         "quit"),
 ]
 
-MENU_H = 8   # fixed number of lines reserved for the menu block
+MENU_H = len(_CMDS)   # reserve enough lines for all commands
 
 def _cmd_matches(text: str):
     if not text.startswith("/"):
@@ -1410,19 +1410,23 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
         _flush(prompt_str + "".join(buf))
         reserved = True
 
+    SEL_COL = "\033[38;5;75m"
+
     def _render(text: str):
+        nonlocal sel
         hits = _cmd_matches(text)
         q    = text[1:] if text.startswith("/") else ""
+        if hits:
+            sel = max(0, min(sel, len(hits) - 1))
         out  = [f"\r\033[K{prompt_str}{text}"]
         for i in range(MENU_H):
             if i < len(hits):
                 cmd, desc = hits[i]
-                is_sel  = (i == sel % len(hits))
-                SEL = "\033[38;5;75m"
+                is_sel = (i == sel)
                 if is_sel:
-                    cmd_hl  = _hl(cmd,  "/" + q if q else "", base=SEL)
-                    desc_hl = _hl(desc, q, base=SEL)
-                    row = f" {c(SEL,'❯')} {cmd_hl}  {desc_hl}"
+                    cmd_hl  = _hl(cmd,  "/" + q if q else "", base=SEL_COL)
+                    desc_hl = _hl(desc, q, base=SEL_COL)
+                    row = f" {c(SEL_COL,'❯')} {cmd_hl}  {desc_hl}"
                 else:
                     cmd_hl  = _hl(cmd,  "/" + q if q else "", base=DIM)
                     desc_hl = _hl(desc, q, base=DIM)
@@ -1432,7 +1436,6 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
                 row = ""
             out.append(f"\r\033[K{row}")
         _flush("\n".join(out))
-        # cursor is now on last menu line; move back up to input line
         _flush(f"\033[{MENU_H}A\r")
         _flush(prompt_str + text)
 
@@ -1458,12 +1461,12 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
                 if seq == b'[A':   # up arrow
                     hits = _cmd_matches("".join(buf))
                     if hits:
-                        sel = (sel - 1) % len(hits)
+                        sel = max(0, sel - 1)
                         _render("".join(buf))
                 elif seq == b'[B': # down arrow
                     hits = _cmd_matches("".join(buf))
                     if hits:
-                        sel = (sel + 1) % len(hits)
+                        sel = min(len(hits) - 1, sel + 1)
                         _render("".join(buf))
                 continue
 
@@ -1472,7 +1475,7 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
                 hits = _cmd_matches(text)
                 # if menu is open pick selected item, else send as-is
                 if reserved and hits:
-                    text = hits[sel % len(hits)][0]
+                    text = hits[min(sel, len(hits)-1)][0]
                 _clear_and_return(text)
                 return text
 
