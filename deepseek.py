@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.19"
+VERSION   = "0.20"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1221,9 +1221,17 @@ def _box(lines, title=""):
 
 def _sep(label=""):
     cols = _cols()
-    s    = f"── {label} " if label else "── "
-    fill = "─" * max(0, cols - len(s) - 1)
-    return c(DBLUE, s + fill)
+    s    = f"── {label} " if label else "─" * cols
+    if label:
+        fill = "─" * max(0, cols - len(s) - 1)
+        s = s + fill
+    return c(DBLUE, s)
+
+def _input_field():
+    """Top bar + prompt line. Bottom bar is printed after each response."""
+    cols = _cols()
+    bar  = c(DBLUE, "─" * cols)
+    return bar + "\n" + c(BBLUE+BOLD, "❯") + " "
 
 def _kv(k, v, w=11):
     return f"  {c(BLUE+DIM, k)}{' ' * max(0, w - len(k))}{v}"
@@ -1253,12 +1261,13 @@ def _show_welcome(cfg, chat_id, chat_title, user_name=""):
     _cls()
     # Store render function for live SIGWINCH redraws
     def _render():
+        cols = _cols()
         return ("\n" +
                 _box(_welcome_lines(cfg, chat_id, chat_title, user_name),
                      title=f"DeepSeek Code  v{VERSION}") +
-                "\n\n" + _sep("input") + "\n")
+                "\n" + c(DBLUE, "─" * cols) + "\n")
     _live_state["fn"] = _render
-    print(_render(), end="")
+    print(_render(), end="", flush=True)
 
 def _manual_update():
     """Check for update on demand (/update command)."""
@@ -1842,13 +1851,22 @@ def main():
             save_cfg(cfg); return "on" if cfg[key] else "off"
 
 
+        def _bottom_bar():
+            cols = _cols()
+            print(c(DBLUE, "─" * cols))
+
+        def _top_bar():
+            cols = _cols()
+            print(c(DBLUE, "─" * cols), end="")
+
         while True:
             try:
                 line = _prompt_with_autocomplete(f"{c(BBLUE+BOLD, '❯')} ").strip()
             except (KeyboardInterrupt, EOFError):
                 print(f"\n{c(DIM, 'bye')}")
                 break
-            if not line: continue
+            if not line:
+                _bottom_bar(); _top_bar(); continue
 
             if line.startswith("/"):
                 parts = line[1:].split(maxsplit=1)
@@ -1865,24 +1883,25 @@ def main():
 
                 elif cmd == "help":
                     _cls(); print(); print(_help_box()); print()
-                    print(_sep("input")); print()
+                    _bottom_bar(); _top_bar(); continue
 
                 elif cmd == "status":
                     _cls(); print(); print(_status_box(cfg, agent.chat_id, agent.chat_title)); print()
-                    print(_sep("input")); print()
+                    _bottom_bar(); _top_bar(); continue
 
                 elif cmd in ("new", "clear"):
                     agent._new_session()
                     _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                    continue
 
                 elif cmd == "chats":
-                    sys.stdout.write("\033[A\r\033[K"); sys.stdout.flush()
                     chosen = _pick_chat(agent)
                     if chosen:
                         agent._load_chat(chosen["id"], chosen["title"])
                         _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
                     else:
-                        print(_sep("input")); print()
+                        print(); _bottom_bar(); _top_bar()
+                    continue
 
                 elif cmd == "delete":
                     _delete_current_chat(agent, cfg)
@@ -1898,7 +1917,6 @@ def main():
                         mn = next(n for k,n,_ in _MODELS if k==arg)
                         print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
                     else:
-                        sys.stdout.write("\033[A\r\033[K"); sys.stdout.flush()
                         chosen = _pick_model(cfg["model"])
                         if chosen:
                             cfg["model"] = chosen; save_cfg(cfg)
@@ -1933,12 +1951,14 @@ def main():
 
                 else:
                     print(c(YELLOW, "  unknown command — /help"))
+                _bottom_bar(); _top_bar()
                 continue
 
             try:
                 agent.turn(line)
             except KeyboardInterrupt:
                 print(f"\n{c(YELLOW,'[interrupted]')}")
+            _bottom_bar(); _top_bar()
 
     finally:
         _exit_app()
