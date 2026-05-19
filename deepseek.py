@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.54"
+VERSION   = "0.55"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -945,9 +945,9 @@ class Agent:
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
-_MNAMES  = {"chat": "DeepSeek V3", "r1": "DeepSeek R1"}
+_MNAMES  = {"chat": "DeepSeek V4", "r1": "DeepSeek R1"}
 _MODELS  = [
-    ("chat", "DeepSeek V3", "default"),
+    ("chat", "DeepSeek V4", "default"),
     ("r1",   "DeepSeek R1", "reasoning · thinking mode"),
 ]
 
