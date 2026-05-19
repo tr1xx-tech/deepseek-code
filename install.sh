@@ -30,7 +30,7 @@ fi
 
 APP="$SHARE_DIR/deepseek.py"
 
-printf "\n  ${CYAN}◆${R}  ${CYAN}DeepSeek Code${R}\n\n"
+printf "\n"
 
 # ── spinner ───────────────────────────────────────────────────────────────────
 ( while true; do
