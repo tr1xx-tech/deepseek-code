@@ -1556,7 +1556,7 @@ def _pick_chat(agent) -> dict | None:
         if confirm_del:
             hint = f" {c(RED, '✗')}  {c(DIM, 'delete? [y/n]')}"
         else:
-            hint = f"   {c(DIM, 'd · delete selected')}"
+            hint = f"   {c(DIM, 'n · new chat   d · delete selected')}"
         out.append(f"\r\033[K{hint}")
         for i, e in enumerate(entries):
             is_cur = e["id"] == agent.chat_id
@@ -1630,6 +1630,11 @@ def _pick_chat(agent) -> dict | None:
                     confirm_del = False
                     _render()
                 continue
+
+            if ch == b'n':
+                _erase()
+                _w()("\033[?25h"); _flush()
+                return {"new": True}
 
             if ch == b'd':
                 confirm_del = True
@@ -1797,7 +1802,10 @@ def main():
 
                 elif cmd == "chats":
                     chosen = _pick_chat(agent)
-                    if chosen:
+                    if chosen and chosen.get("new"):
+                        agent._new_session()
+                        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                    elif chosen:
                         agent._load_chat(chosen["id"], chosen["title"])
                         _cls()
                         _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
