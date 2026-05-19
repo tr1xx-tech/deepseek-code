@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.52"
+VERSION   = "0.53"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1112,12 +1112,10 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
     else:
         try:    uname = getpass.getuser()
         except: uname = os.environ.get("USER") or os.environ.get("USERNAME") or "there"
-    av1 = c(BCYAN+BOLD, "▐▛██▛▌")
-    av2 = c(BCYAN+BOLD, "▐█▟██▌")
     return [
         "",
-        f"  {av1}  {c(BCYAN+BOLD, 'Welcome back, ' + uname + '!')}",
-        f"  {av2}  {c(DIM, 'Send /help for help · /exit to quit.')}",
+        f"  {c(BCYAN+BOLD, 'Welcome back, ' + uname + '!')}",
+        f"  {c(DIM, 'Send /help for help · /exit to quit.')}",
         "",
         f"  {c(DIM, 'Directory:')}  {c(DIM, cwd)}",
         f"  {c(DIM, 'Model:')}      {c(DIM, mn)}",
