@@ -1471,11 +1471,9 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _done(text: str):
         if reserved:
             _clear_menu(text)
-        _flush(f"\r\033[K{PR}{text}\r\n\033[?25h")
+        _flush(f"\r\033[K{PR}{text}\r\n\033[K{c(DBLUE, '─' * _cols())}\r\n\033[?25h")
 
-    # Print ❯ line, then bottom bar, then move cursor back up to ❯ line
-    sys.stdout.write(f"{PR}\n{c(DBLUE, '─' * _cols())}\033[1A\r{PR}")
-    sys.stdout.flush()
+    sys.stdout.write(PR); sys.stdout.flush()
     try:
         _tty_mod.setraw(fd)
         while True:
