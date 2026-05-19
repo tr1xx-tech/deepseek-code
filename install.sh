@@ -165,8 +165,8 @@ case ":$PATH:" in
         printf "  ${CYAN}❯${R}  Run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
         ;;
     *)
-        printf "  Add to PATH first:\n\n"
-        printf "    ${HL}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
+        printf "  ${CYAN}◆${R}  Add to PATH first:\n\n"
+        printf "      ${HL}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
         printf "  ${CYAN}❯${R}  Run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
         ;;
 esac
