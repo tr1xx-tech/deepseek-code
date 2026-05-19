@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.35"
+VERSION   = "0.36"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1207,7 +1207,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     menu_open = False
 
     def _done(text: str):
-        BG     = "\033[48;5;235m"
+        BG     = "\033[48;5;238m"
         FG     = "\033[97m"
         INDENT = "  "
         cols   = _cols()
