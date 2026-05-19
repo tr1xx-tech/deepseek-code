@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.56"
+VERSION   = "0.57"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -846,8 +846,18 @@ class Agent:
         cancelled  = threading.Event()
         done       = threading.Event()
         err        = [None]
+        out_lock   = threading.Lock()
+        stream_write_fn: list = [None]  # set by _show_stream_bar
 
         print()
+
+        def _sw(text: str):
+            fn = stream_write_fn[0]
+            if fn is not None:
+                fn(text)
+            else:
+                sys.stdout.write(text)
+                sys.stdout.flush()
 
         def _run():
             nonlocal in_think, first_text
@@ -858,26 +868,22 @@ class Agent:
                     if cancelled.is_set():
                         break
                     kind, content = chunk["type"], chunk["content"]
-                    if kind == "thinking":
-                        if not in_think:
-                            sys.stdout.write(f"{dim('╭─ thinking ─────────────────')}\n")
-                            sys.stdout.flush()
-                            in_think = True
-                        sys.stdout.write(dim(content))
-                        sys.stdout.flush()
-                    elif kind == "text":
-                        if in_think:
-                            sys.stdout.write(f"\n{dim('╰────────────────────────────')}\n\n")
-                            sys.stdout.flush()
-                            in_think = False
-                        if first_text and content:
-                            sys.stdout.write(f"{c(DBLUE, '●')} ")
-                            sys.stdout.flush()
-                            first_text = False
-                        sys.stdout.write(c("\033[38;5;75m", content.replace("\n", "\n  ")))
-                        sys.stdout.flush()
-                        buf.append(content)
-                    elif kind == "title":
+                    with out_lock:
+                        if kind == "thinking":
+                            if not in_think:
+                                _sw(f"{dim('╭─ thinking ─────────────────')}\n")
+                                in_think = True
+                            _sw(dim(content))
+                        elif kind == "text":
+                            if in_think:
+                                _sw(f"\n{dim('╰────────────────────────────')}\n\n")
+                                in_think = False
+                            if first_text and content:
+                                _sw(f"{c(DBLUE, '●')} ")
+                                first_text = False
+                            _sw(c("\033[38;5;75m", content.replace("\n", "\n  ")))
+                            buf.append(content)
+                    if kind == "title":
                         self.chat_title = content
                         _update_chat_title(self.chat_id, content)
                     if chunk.get("finish_reason") == "stop":
@@ -891,8 +897,7 @@ class Agent:
         t = threading.Thread(target=_run, daemon=True)
         t.start()
 
-        # show input bar with esc·cancel hint while AI is streaming
-        was_cancelled = _show_stream_bar(done)
+        was_cancelled = _show_stream_bar(done, out_lock, stream_write_fn)
         if was_cancelled:
             cancelled.set()
         done.wait()
@@ -1281,8 +1286,12 @@ def _hl(text: str, query: str, base: str = "") -> str:
             c(HL, text[idx:idx+len(query)]) +
             _b(text[idx+len(query):]))
 
-def _show_stream_bar(done: threading.Event) -> bool:
-    """Draw input panel with esc·cancel hint while AI streams. Returns True if cancelled."""
+_input_history: list[str] = []   # submitted prompts, newest last
+
+def _show_stream_bar(done: threading.Event,
+                     out_lock: "threading.Lock | None" = None,
+                     stream_write_fn: "list | None" = None) -> bool:
+    """Draw fixed 4-line input panel; AI text scrolls above. Returns True if cancelled."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         done.wait()
         return False
@@ -1294,14 +1303,84 @@ def _show_stream_bar(done: threading.Event) -> bool:
 
     fd       = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
+    rows     = _rows()
+    cols     = _cols()
 
-    def _bar(): return c(DBLUE, "─" * _cols())
+    def _bar():    return c(DBLUE, "─" * cols)
     def _flush(s): sys.stdout.write(s); sys.stdout.flush()
 
-    # Draw: top bar / empty ❯ row / bottom bar / hint line
-    PR   = c(BBLUE+BOLD, "❯") + " "
-    hint = f"  {c(DIM, 'esc · cancel')}"
-    _flush(f"\033[?7l{_bar()}\r\n{PR}\r\n{_bar()}\r\n{hint}\033[3A\r{PR}")
+    PR         = c(BBLUE+BOLD, "❯") + " "
+    hint       = f"  {c(DIM, 'esc · cancel')}"
+    cursor_row = rows - 2   # row where ❯ lives (1-based)
+
+    # Query real cursor position before drawing panel (raw mode temporarily).
+    def _query_cursor_pos() -> tuple:
+        try:
+            import re as _re
+            _tty_mod.setraw(fd)
+            sys.stdout.write("\033[6n"); sys.stdout.flush()
+            rdy, _, _ = select.select([fd], [], [], 0.2)
+            resp = b""
+            if rdy:
+                os.set_blocking(fd, False)
+                try:
+                    while True:
+                        ch = os.read(fd, 1); resp += ch
+                        if ch == b'R': break
+                except BlockingIOError:
+                    pass
+                os.set_blocking(fd, True)
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+            m = _re.search(rb'\[(\d+);(\d+)R', resp)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+        except Exception:
+            pass
+        return (rows - 4, 1)
+
+    ai_pos = list(_query_cursor_pos())   # where AI text starts
+
+    # Reserve bottom 4 rows for panel; AI text scrolls in rows 1..(rows-4).
+    _flush(
+        f"\033[1;{rows-4}r"                    # scroll region: rows 1 to rows-4
+        f"\033[{rows-3};1H\033[K{_bar()}"      # rows-3: top bar
+        f"\033[{rows-2};1H\033[K{PR}"          # rows-2: ❯ row
+        f"\033[{rows-1};1H\033[K{_bar()}"      # rows-1: bottom bar
+        f"\033[{rows};1H\033[K{hint}"          # rows:   hint
+        f"\033[{cursor_row};3H"                # cursor to ❯ row col 3
+    )
+
+    # Set up panel-aware writer for the AI stream thread.
+    # Writes text at ai_pos, updates ai_pos, then restores cursor to ❯ row.
+    if stream_write_fn is not None:
+        def _advance(pos: list, text: str):
+            i = 0; r, col = pos; max_r = rows - 4
+            while i < len(text):
+                ch = text[i]
+                if ch == '\033':
+                    i += 1
+                    if i < len(text) and text[i] == '[':
+                        i += 1
+                        while i < len(text) and text[i] not in 'ABCDEFGHJKSTmsu':
+                            i += 1
+                    i += 1
+                elif ch == '\n':
+                    r = min(r + 1, max_r); col = 1; i += 1
+                elif ch == '\r':
+                    col = 1; i += 1
+                else:
+                    col += 1
+                    if col > cols:
+                        r = min(r + 1, max_r); col = 1
+                    i += 1
+            pos[0] = r; pos[1] = col
+
+        def _panel_write(text: str):
+            r, col = ai_pos
+            _flush(f"\033[{r};{col}H" + text + f"\033[{cursor_row};3H")
+            _advance(ai_pos, text)
+
+        stream_write_fn[0] = _panel_write
 
     cancelled = False
     try:
@@ -1325,9 +1404,17 @@ def _show_stream_bar(done: threading.Event) -> bool:
                 cancelled = True
                 break
     finally:
+        if stream_write_fn is not None:
+            stream_write_fn[0] = None
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
-        # erase the 4 lines: top bar + ❯ row + bottom bar + hint
-        _flush("\033[?7h\033[3A\r\033[K\033[1B\r\033[K\033[1B\r\033[K\033[1B\r\033[K\033[3A\r")
+        _flush(
+            f"\033[1;{rows}r"           # restore full scroll region
+            f"\033[{rows-3};1H\033[K"  # clear top bar
+            f"\033[{rows-2};1H\033[K"  # clear ❯ row
+            f"\033[{rows-1};1H\033[K"  # clear bottom bar
+            f"\033[{rows};1H\033[K"    # clear hint
+            "\033[?7h"
+        )
 
     return cancelled
 
@@ -1346,6 +1433,9 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     sel      = 0
     SEL_COL  = "\033[38;5;75m"
     PR       = c(BBLUE+BOLD, "❯") + " "
+
+    hist_idx  = [len(_input_history)]  # points past end = not browsing
+    saved_buf = [""]                   # draft saved when entering history
 
     def _bar(): return c(DBLUE, "─" * _cols())
     def _flush(s): sys.stdout.write(s); sys.stdout.flush()
@@ -1509,11 +1599,27 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                     if hits:
                         sel = max(0, sel - 1); menu_open = True
                         _redraw_menu("".join(buf))
+                    elif _input_history:
+                        if hist_idx[0] == len(_input_history):
+                            saved_buf[0] = "".join(buf)
+                        hist_idx[0] = max(0, hist_idx[0] - 1)
+                        buf[:] = list(_input_history[hist_idx[0]]); sel = 0
+                        if menu_open: _clear_menu("".join(buf)); menu_open = False
+                        _redraw("".join(buf))
                 elif seq == b'[B':
                     hits = _cmd_matches("".join(buf))
                     if hits:
                         sel = min(len(hits)-1, sel+1); menu_open = True
                         _redraw_menu("".join(buf))
+                    elif hist_idx[0] < len(_input_history):
+                        hist_idx[0] += 1
+                        if hist_idx[0] == len(_input_history):
+                            buf[:] = list(saved_buf[0])
+                        else:
+                            buf[:] = list(_input_history[hist_idx[0]])
+                        sel = 0
+                        if menu_open: _clear_menu("".join(buf)); menu_open = False
+                        _redraw("".join(buf))
                 else:
                     if menu_open:
                         _clear_menu("".join(buf)); menu_open = False
@@ -1529,6 +1635,11 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                     text = hits[min(sel, len(hits)-1)][0]
                 if menu_open:
                     _clear_menu(text); menu_open = False
+                if text and (not _input_history or _input_history[-1] != text):
+                    _input_history.append(text)
+                    if len(_input_history) > 200:
+                        _input_history.pop(0)
+                hist_idx[0] = len(_input_history)
                 _done(text)
                 return text
 
