@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.20"
+VERSION   = "0.21"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1201,7 +1201,7 @@ def _vis_len(s: str) -> int:
 
 def _box(lines, title=""):
     cols = _cols()
-    W    = max(40, min(cols - 2, 120))
+    W    = max(40, cols - 2)
     d    = W - 2
     cw   = W - 4
 
@@ -1853,11 +1853,13 @@ def main():
 
         def _bottom_bar():
             cols = _cols()
-            print(c(DBLUE, "─" * cols))
+            sys.stdout.write(c(DBLUE, "─" * cols) + "\n")
+            sys.stdout.flush()
 
         def _top_bar():
             cols = _cols()
-            print(c(DBLUE, "─" * cols), end="")
+            sys.stdout.write(c(DBLUE, "─" * cols) + "\n")
+            sys.stdout.flush()
 
         while True:
             try:
