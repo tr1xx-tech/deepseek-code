@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.6"
+VERSION   = "0.7"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1272,6 +1272,8 @@ _CMDS = [
     ("/exit",         "quit"),
 ]
 
+MENU_H = 8   # fixed number of lines reserved for the menu block
+
 def _cmd_matches(text: str):
     if not text.startswith("/"):
         return []
@@ -1285,13 +1287,13 @@ def _cmd_matches(text: str):
 
 def _hl(text: str, query: str) -> str:
     if not query:
-        return c(DIM, text)
+        return text
     idx = text.lower().find(query.lower())
     if idx == -1:
-        return c(DIM, text)
-    return (c(DIM, text[:idx]) +
+        return text
+    return (text[:idx] +
             c(BCYAN+BOLD, text[idx:idx+len(query)]) +
-            c(DIM, text[idx+len(query):]))
+            text[idx+len(query):])
 
 def _prompt_with_autocomplete(prompt_str: str) -> str:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -1304,48 +1306,64 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
     fd       = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
     buf      = []
-    sel      = -1
-    drawn    = 0   # number of menu lines currently on screen below cursor
+    sel      = 0          # always highlight first match
+    reserved = False      # have we printed the blank menu block yet?
+
+    W = _cols()
 
     def _flush(s: str):
         sys.stdout.write(s); sys.stdout.flush()
 
-    def _erase_menu():
-        nonlocal drawn
-        if not drawn:
+    def _reserve():
+        """Print MENU_H blank lines below input, then come back up."""
+        nonlocal reserved
+        if reserved:
             return
-        # move down to last menu line, then erase upward back to input line
-        _flush(f"\033[{drawn}B")
-        for _ in range(drawn):
-            _flush("\r\033[2K\033[A")
-        drawn = 0
-
-    def _draw_menu(text: str, selected: int):
-        nonlocal drawn
-        _erase_menu()
-        hits = _cmd_matches(text)
-        if not hits:
-            return
-        q   = text[1:] if text.startswith("/") else ""
-        W   = _cols()
-        out = []
-        for i, (cmd, desc) in enumerate(hits[:7]):
-            cmd_hl  = _hl(cmd,  "/" + q if q else "")
-            desc_hl = _hl(desc, q)
-            marker  = c(BCYAN+BOLD, "❯") if i == selected else " "
-            line    = f" {marker} {cmd_hl}  {desc_hl}"
-            vl      = _vis_len(line)
-            line   += " " * max(0, W - vl - 1)
-            out.append(line)
-        _flush("\n" + "\n".join(out))
-        # move cursor back up: len(out) lines of menu + 1 for the leading \n
-        _flush(f"\033[{len(out) + 1}A\r")
-        # reposition after prompt
+        # print blank lines to push terminal scroll, then move back up
+        _flush("\n" * MENU_H)
+        _flush(f"\033[{MENU_H}A\r")
         _flush(prompt_str + "".join(buf))
-        drawn = len(out) + 1
+        reserved = True
 
-    def _redraw_input():
-        _flush(f"\r\033[K{prompt_str}{''.join(buf)}")
+    def _render(text: str):
+        """Redraw input line + full menu block in-place."""
+        hits = _cmd_matches(text)
+        q    = text[1:] if text.startswith("/") else ""
+
+        # go to start of input line
+        if reserved:
+            # cursor is on input line; just overwrite from col 0
+            pass
+        _flush(f"\r\033[K{prompt_str}{text}")
+
+        # write each menu line
+        for i in range(MENU_H):
+            _flush("\n\r\033[K")   # next line, clear it
+            if i < len(hits):
+                cmd, desc = hits[i]
+                cmd_hl  = _hl(cmd,  "/" + q if q else "")
+                desc_hl = _hl(desc, q)
+                is_sel  = (i == sel % len(hits) if hits else False)
+                if is_sel:
+                    # full-row highlight: blue background via reverse+color
+                    row = f" {c(BCYAN+BOLD, '❯')} {c(BCYAN+BOLD, cmd_hl)}  {c(BCYAN, desc_hl)}"
+                else:
+                    row = f"   {c(DIM, cmd_hl)}  {c(DIM, desc_hl)}"
+                vl  = _vis_len(row)
+                row += " " * max(0, W - vl - 1)
+                _flush(row)
+
+        # move cursor back up to input line
+        _flush(f"\033[{MENU_H}A\r")
+        _flush(prompt_str + text)
+
+    def _clear_and_return(text: str):
+        """Erase menu block, move to input line end, print newline."""
+        _flush(f"\r\033[K{prompt_str}{text}")
+        for _ in range(MENU_H):
+            _flush("\n\r\033[K")
+        _flush(f"\033[{MENU_H}A\r\033[K")
+        _flush("\n")
 
     _flush(prompt_str)
     try:
@@ -1354,77 +1372,83 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
             ch = os.read(fd, 1)
 
             if ch == b'\x1b':
-                # read escape sequence — may be 1 or 2 more bytes
                 try:
-                    import fcntl, termios as _t2
                     seq = os.read(fd, 2)
                 except Exception:
                     seq = b''
-                if seq == b'[A':          # up
+                if seq == b'[A':   # up arrow
                     hits = _cmd_matches("".join(buf))
                     if hits:
-                        n   = len(hits[:7])
-                        sel = (sel - 1) % n if sel > 0 else 0
-                        _redraw_input()
-                        _draw_menu("".join(buf), sel)
-                elif seq == b'[B':        # down
+                        sel = (sel - 1) % len(hits)
+                        _render("".join(buf))
+                elif seq == b'[B': # down arrow
                     hits = _cmd_matches("".join(buf))
                     if hits:
-                        n   = len(hits[:7])
-                        sel = (sel + 1) % n
-                        _redraw_input()
-                        _draw_menu("".join(buf), sel)
+                        sel = (sel + 1) % len(hits)
+                        _render("".join(buf))
                 continue
 
             if ch in (b'\r', b'\n'):
                 text = "".join(buf)
                 hits = _cmd_matches(text)
-                if 0 <= sel < len(hits):
-                    text = hits[sel][0]
-                _erase_menu()
-                _flush("\n")
+                # if menu is open pick selected item, else send as-is
+                if reserved and hits:
+                    text = hits[sel % len(hits)][0]
+                _clear_and_return(text)
                 return text
 
             if ch == b'\x03':
-                _erase_menu(); _flush("\n")
+                _clear_and_return("")
                 raise KeyboardInterrupt
             if ch == b'\x04':
-                _erase_menu(); _flush("\n")
+                _clear_and_return("")
                 raise EOFError
 
             if ch == b'\t':
                 hits = _cmd_matches("".join(buf))
                 if hits:
-                    sel  = max(sel, 0)
-                    buf  = list(hits[sel][0])
-                    _redraw_input()
-                    _draw_menu("".join(buf), sel)
+                    buf = list(hits[sel % len(hits)][0])
+                    sel = 0
+                    _reserve()
+                    _render("".join(buf))
                 continue
 
             if ch in (b'\x7f', b'\x08'):
                 if buf:
                     buf.pop()
-                    sel = -1
-                    _redraw_input()
-                    if "".join(buf).startswith("/"):
-                        _draw_menu("".join(buf), sel)
+                    sel = 0
+                    text = "".join(buf)
+                    if text.startswith("/"):
+                        _reserve()
+                        _render(text)
                     else:
-                        _erase_menu()
+                        if reserved:
+                            _clear_and_return(text)
+                            reserved = False
+                            _flush(prompt_str + text)
+                        else:
+                            _flush(f"\r\033[K{prompt_str}{text}")
                 continue
 
             try:
                 char = ch.decode('utf-8')
             except UnicodeDecodeError:
                 continue
-            if char < ' ' and char not in ('\t',):
+            if char < ' ':
                 continue
             buf.append(char)
-            sel = -1
-            _redraw_input()
-            if "".join(buf).startswith("/"):
-                _draw_menu("".join(buf), sel)
+            sel = 0
+            text = "".join(buf)
+            if text.startswith("/"):
+                _reserve()
+                _render(text)
             else:
-                _erase_menu()
+                if reserved:
+                    _clear_and_return(text)
+                    reserved = False
+                    _flush(prompt_str + text)
+                else:
+                    _flush(f"\r\033[K{prompt_str}{text}")
 
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
