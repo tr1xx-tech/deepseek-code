@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.27"
+VERSION   = "0.28"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1425,7 +1425,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
 
     # Draw 3-line field: top bar / ❯ row / bottom bar
     # Cursor ends up on ❯ row (2 lines up from bottom bar)
-    sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\033[1A\r{PR}")
+    sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\r{PR}")
     sys.stdout.flush()
 
     # All positioning is relative — no ESC[6n needed.
