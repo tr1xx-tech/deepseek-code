@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.53"
+VERSION   = "0.54"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -75,7 +75,7 @@ def _check_update():
 
 DEFAULTS = dict(
     auth_token   = "",
-    model        = "flash",
+    model        = "chat",
     thinking     = False,
     search       = True,
     confirm_bash = True,
@@ -838,8 +838,7 @@ class Agent:
         print()
 
     def _stream(self, prompt: str) -> str:
-        r1       = self.cfg["model"] == "r1"
-        thinking = self.cfg["thinking"] and r1
+        thinking = self.cfg["model"] == "r1"
         search   = self.cfg["search"]
         buf        = []
         in_think   = False
@@ -874,7 +873,7 @@ class Agent:
                     if mid: self.parent_id = mid
         except Exception as e:
             print(c(RED, f"\nStream error: {e}"))
-        print("\n")
+        print()
         result = "".join(buf)
         if result:
             _append_history(self.chat_id, "assistant", result)
@@ -946,11 +945,10 @@ class Agent:
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
-_MNAMES  = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro", "r1": "deepseek-r1"}
+_MNAMES  = {"chat": "DeepSeek V3", "r1": "DeepSeek R1"}
 _MODELS  = [
-    ("flash", "DeepSeek V4 Flash",  "fast · default"),
-    ("pro",   "DeepSeek V4 Pro",    "smarter · slower"),
-    ("r1",    "DeepSeek R1",        "reasoning · thinking mode"),
+    ("chat", "DeepSeek V3", "default"),
+    ("r1",   "DeepSeek R1", "reasoning · thinking mode"),
 ]
 
 def _pick_model(current: str) -> str | None:
@@ -1112,10 +1110,12 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
     else:
         try:    uname = getpass.getuser()
         except: uname = os.environ.get("USER") or os.environ.get("USERNAME") or "there"
+    av1 = c(BCYAN+BOLD, "▐▛██▛▌")
+    av2 = c(BCYAN+BOLD, "▐█▟██▌")
     return [
         "",
-        f"  {c(BCYAN+BOLD, 'Welcome back, ' + uname + '!')}",
-        f"  {c(DIM, 'Send /help for help · /exit to quit.')}",
+        f"  {av1}  {c(BCYAN+BOLD, 'Welcome back, ' + uname + '!')}",
+        f"  {av2}  {c(DIM, 'Send /help for help · /exit to quit.')}",
         "",
         f"  {c(DIM, 'Directory:')}  {c(DIM, cwd)}",
         f"  {c(DIM, 'Model:')}      {c(DIM, mn)}",
@@ -1216,7 +1216,6 @@ _CMDS = [
     ("/cwd",          "change working directory"),
     ("/login",        "re-authenticate"),
     ("/search",       "toggle web search on/off"),
-    ("/thinking",     "toggle r1 reasoning trace"),
     ("/confirm",      "toggle shell confirmation"),
     ("/status",       "show current settings"),
     ("/update",        "check for updates"),
@@ -1529,7 +1528,6 @@ def _help_box():
         row("/login",        "re-authenticate"),
         sec("settings"),
         row("/search",       "toggle web search (on by default)"),
-        row("/thinking",     "toggle r1 reasoning trace"),
         row("/confirm",      "toggle shell confirmation"),
         row("/status",       "show current settings"),
         sec("other"),
@@ -1551,7 +1549,6 @@ def _status_box(cfg, chat_id="", chat_title=""):
         "",
         _kv("model",     c(BCYAN+BOLD, mn)),
         _kv("search",    on if cfg["search"]       else off),
-        _kv("thinking",  on if cfg["thinking"]     else off),
         _kv("confirm",   on if cfg["confirm_bash"] else off),
         _kv("directory", c(DIM, cwd)),
         _kv("version",   c(DIM, VERSION)),
@@ -1875,7 +1872,7 @@ def main():
                     print(f"  {c(GREEN,'✓')}  {c(DIM, 'logged in')}")
 
                 elif cmd == "model":
-                    if arg in ("flash", "pro", "r1"):
+                    if arg in ("chat", "r1"):
                         cfg["model"] = arg; save_cfg(cfg)
                         mn = next(n for k,n,_ in _MODELS if k==arg)
                         print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
@@ -1887,10 +1884,6 @@ def main():
                             print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
                         else:
                             print(f"  {c(DIM, _MNAMES.get(cfg['model'], cfg['model']))}")
-
-                elif cmd == "thinking":
-                    v = toggle("thinking", arg)
-                    print(f"  thinking  {c(GREEN+BOLD,'on') if v=='on' else c(DIM,'off')}")
 
                 elif cmd == "search":
                     v = toggle("search", arg)
