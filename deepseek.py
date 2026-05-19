@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.24"
+VERSION   = "0.25"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1024,7 +1024,7 @@ class Agent:
                     if in_think:
                         print(f"\n{dim('╰────────────────────────────')}\n", flush=True)
                         in_think = False
-                    print(content, end="", flush=True)
+                    print(c("\033[38;5;75m", content), end="", flush=True)
                     buf.append(content)
                 if chunk.get("finish_reason") == "stop":
                     mid = chunk.get("message_id")
@@ -1423,9 +1423,8 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _bar(): return c(DBLUE, "─" * _cols())
     def _flush(s): sys.stdout.write(s); sys.stdout.flush()
 
-    # Draw the 3-line field: top bar, ❯ row, bottom bar
-    # Then move cursor back up to sit on ❯ row
-    sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\r{PR}")
+    # Draw 2-line field: ❯ row + bottom bar; move cursor back up to ❯ row
+    sys.stdout.write(f"{PR}\r\n{_bar()}\033[1A\r{PR}")
     sys.stdout.flush()
 
     # Row number of the ❯ line (1-indexed); bottom bar is row+1
@@ -1463,7 +1462,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         if prompt_row:
             out = []
             for i in range(MENU_H):
-                r = prompt_row - 1 - MENU_H + i
+                r = prompt_row - MENU_H + i
                 if r < 1: continue
                 if i < len(hits):
                     cmd, desc = hits[i]
@@ -1484,7 +1483,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         if prompt_row:
             out = []
             for i in range(MENU_H):
-                r = prompt_row - 1 - MENU_H + i
+                r = prompt_row - MENU_H + i
                 if r >= 1:
                     out.append(f"\033[{r};1H\033[K")
             out.append(f"\033[{prompt_row};1H\033[K{PR}{text}")
@@ -1493,14 +1492,14 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     menu_open = False
 
     def _done(text: str):
-        # Redraw ❯ line, clear bottom bar, position cursor after ❯ line
-        # so AI response prints right below the prompt
+        # Redraw ❯ line with text in gray, clear bottom bar, cursor to next line
+        gray_text = c(DIM, text) if text else ""
         if prompt_row:
-            _flush(f"\033[{prompt_row};1H\033[K{PR}{text}"
+            _flush(f"\033[{prompt_row};1H\033[K{PR}{gray_text}"
                    f"\033[{prompt_row+1};1H\033[K"
                    f"\033[{prompt_row};1H\r\n")
         else:
-            _flush(f"\r\033[K{PR}{text}\r\n")
+            _flush(f"\r\033[K{PR}{gray_text}\r\n")
         _flush("\033[?25h")
 
     try:
@@ -1980,7 +1979,6 @@ def main():
                 agent.turn(line)
             except KeyboardInterrupt:
                 print(f"\n{c(YELLOW,'[interrupted]')}")
-
 
     finally:
         _exit_app()
