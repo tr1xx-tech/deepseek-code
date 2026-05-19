@@ -6,10 +6,9 @@ deepseek.py — DeepSeek Code Agent
 # ─────────────────────────────────────────────────────────────────────────────
 # stdlib
 # ─────────────────────────────────────────────────────────────────────────────
-import os, sys, json, re, base64, html, time, threading, webbrowser, shutil, signal, getpass
+import os, sys, json, re, base64, html, time, threading, shutil, signal, getpass
 import subprocess, traceback, urllib.request, urllib.parse
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Generator
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.32"
+VERSION   = "0.33"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -406,274 +405,24 @@ class DeepSeekClient:
             }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BROWSER COOKIE AUTO-DETECT
 # ─────────────────────────────────────────────────────────────────────────────
-def _find_browser_cookies() -> dict:
-    """Try to read deepseek cookies from Chrome/Firefox/Brave/Edge on disk."""
-    import sqlite3, tempfile, glob
-
-    home = Path.home()
-    found = {}
-
-    # ── Chrome / Brave / Edge (SQLite Cookies) ────────────────────────────────
-    chrome_paths = []
-    if sys.platform == "darwin":
-        chrome_paths = [
-            home/"Library/Application Support/Google/Chrome/Default/Cookies",
-            home/"Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
-            home/"Library/Application Support/Microsoft Edge/Default/Cookies",
-        ]
-    elif sys.platform == "win32":
-        local = Path(os.environ.get("LOCALAPPDATA", ""))
-        chrome_paths = [
-            local/"Google/Chrome/User Data/Default/Network/Cookies",
-            local/"BraveSoftware/Brave-Browser/User Data/Default/Network/Cookies",
-            local/"Microsoft/Edge/User Data/Default/Network/Cookies",
-        ]
-    else:
-        chrome_paths = [
-            home/".config/google-chrome/Default/Cookies",
-            home/".config/chromium/Default/Cookies",
-            home/".config/BraveSoftware/Brave-Browser/Default/Cookies",
-            home/".config/microsoft-edge/Default/Cookies",
-        ]
-
-    for p in chrome_paths:
-        if not p.exists():
-            continue
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                tmp.write(p.read_bytes())
-                tmp_path = tmp.name
-            con = sqlite3.connect(tmp_path)
-            cur = con.execute(
-                "SELECT name, value, encrypted_value FROM cookies "
-                "WHERE host_key LIKE '%deepseek.com'"
-            )
-            for name, value, enc in cur.fetchall():
-                if value:
-                    found[name] = value
-                # encrypted_value on macOS/Win needs keyring — skip silently
-            con.close()
-            os.unlink(tmp_path)
-            if found:
-                return found
-        except Exception:
-            pass
-
-    # ── Firefox (SQLite cookies.sqlite) ──────────────────────────────────────
-    ff_roots = []
-    if sys.platform == "darwin":
-        ff_roots = list((home/"Library/Application Support/Firefox/Profiles").glob("*.default*"))
-    elif sys.platform == "win32":
-        roaming = Path(os.environ.get("APPDATA", ""))
-        ff_roots = list((roaming/"Mozilla/Firefox/Profiles").glob("*.default*"))
-    else:
-        ff_roots = list((home/".mozilla/firefox").glob("*.default*"))
-
-    for prof in ff_roots:
-        db = prof / "cookies.sqlite"
-        if not db.exists():
-            continue
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                tmp.write(db.read_bytes())
-                tmp_path = tmp.name
-            con = sqlite3.connect(tmp_path)
-            cur = con.execute(
-                "SELECT name, value FROM moz_cookies WHERE host LIKE '%deepseek.com'"
-            )
-            for name, value in cur.fetchall():
-                if value:
-                    found[name] = value
-            con.close()
-            os.unlink(tmp_path)
-            if found:
-                return found
-        except Exception:
-            pass
-
-    return found
-
-
+# LOGIN
 # ─────────────────────────────────────────────────────────────────────────────
-# BROWSER LOGIN
-# ─────────────────────────────────────────────────────────────────────────────
-_LOGIN_HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>DeepSeek Code — Login</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0d0d0d;color:#e0e0e0;
-     min-height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:#161616;border:1px solid #2a2a2a;border-radius:14px;
-      padding:44px 40px;max-width:540px;width:100%;box-shadow:0 8px 40px #0008}
-h1{font-size:1.35rem;font-weight:700;color:#fff;margin-bottom:6px}
-.sub{color:#666;font-size:.82rem;margin-bottom:36px}
-.step{display:flex;gap:14px;margin-bottom:26px;align-items:flex-start}
-.num{background:#1a2e4a;color:#60a5fa;border-radius:50%;width:30px;height:30px;
-     display:flex;align-items:center;justify-content:center;font-size:.72rem;
-     font-weight:700;flex-shrink:0;margin-top:1px}
-.sb h3{font-size:.85rem;font-weight:600;color:#fff;margin-bottom:5px}
-.sb p{font-size:.78rem;color:#777;line-height:1.55;margin-bottom:8px}
-.code{background:#0a0a0a;border:1px solid #252525;border-radius:7px;
-      padding:9px 13px;font-family:monospace;font-size:.76rem;color:#7dd3fc;
-      cursor:pointer;transition:border-color .18s;position:relative}
-.code:hover{border-color:#3b82f6}
-.code-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
-.code-row span{word-break:break-all;overflow-wrap:anywhere;flex:1;min-width:0}
-.cp{font-size:.68rem;color:#555;background:none;border:none;cursor:pointer;
-    white-space:nowrap;padding:2px 6px;border-radius:4px;transition:all .15s;flex-shrink:0}
-.cp:hover{background:#1e293b;color:#93c5fd}
-.cp.ok{color:#4ade80}
-input{width:100%;background:#0a0a0a;border:1px solid #252525;border-radius:7px;
-      padding:10px 13px;color:#e0e0e0;font-size:.85rem;outline:none;
-      transition:border-color .18s;margin-top:7px;font-family:monospace}
-input:focus{border-color:#3b82f6}
-input::placeholder{color:#444}
-.btn{width:100%;margin-top:24px;padding:12px;background:#1d4ed8;border:none;
-     border-radius:8px;color:#fff;font-size:.9rem;font-weight:600;cursor:pointer;
-     transition:background .18s;letter-spacing:.01em}
-.btn:hover{background:#2563eb}
-.btn:disabled{background:#1e293b;color:#4b5563;cursor:not-allowed}
-.btn-auto{width:100%;margin-top:10px;padding:11px;background:#0f2a1a;border:1px solid #166534;
-     border-radius:8px;color:#4ade80;font-size:.85rem;font-weight:600;cursor:pointer;
-     transition:all .18s;letter-spacing:.01em}
-.btn-auto:hover{background:#14532d;border-color:#22c55e}
-.btn-auto:disabled{opacity:.4;cursor:not-allowed}
-.status{margin-top:14px;font-size:.78rem;text-align:center;min-height:18px;
-        letter-spacing:.01em}
-.ok{color:#4ade80} .err{color:#f87171}
-a{color:#60a5fa;text-decoration:none}
-a:hover{text-decoration:underline}
-hr{border:none;border-top:1px solid #1e1e1e;margin:28px 0}
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>Connect DeepSeek Code</h1>
-  <p class="sub">Link your DeepSeek account — 30 seconds</p>
-
-  <div class="step">
-    <div class="num">1</div>
-    <div class="sb">
-      <h3>Log in to DeepSeek</h3>
-      <p>A new tab just opened. Sign in with your account.</p>
-      <a href="https://chat.deepseek.com" target="_blank">Open chat.deepseek.com →</a>
-    </div>
-  </div>
-
-  <div class="step">
-    <div class="num">2</div>
-    <div class="sb">
-      <h3>Run this in DevTools Console</h3>
-      <p>Open <b>chat.deepseek.com</b>, press <b>F12</b> → Console, paste and press Enter:</p>
-      <div class="code" onclick="copyCode(this)">
-        <div class="code-row">
-          <span id="jscmd">console.log(JSON.stringify({t:JSON.parse(localStorage.getItem("userToken")).value,c:document.cookie}))</span>
-          <button class="cp" tabindex="-1">Copy</button>
-        </div>
-      </div>
-      <p style="margin-top:7px">The result appears in the console — copy it and paste below.</p>
-    </div>
-  </div>
-
-  <div class="step">
-    <div class="num">3</div>
-    <div class="sb">
-      <h3>Paste here and connect</h3>
-      <p>Paste the JSON from the console into the field below:</p>
-      <input id="inp" type="text" placeholder='{"t":"eyJ...","c":"cf_clearance=..."}' autocomplete="off" spellcheck="false"/>
-    </div>
-  </div>
-
-  <button class="btn" id="btn" onclick="connect()">Connect</button>
-  <button class="btn-auto" id="abtn" onclick="autoDetect()">⚡ Auto-detect from browser</button>
-  <div class="status" id="st"></div>
-</div>
-
-<script>
-function copyCode(el){
-  const txt = document.getElementById('jscmd').textContent;
-  navigator.clipboard.writeText(txt).then(()=>{
-    const b = el.querySelector('.cp');
-    b.textContent='Copied!'; b.classList.add('ok');
-    setTimeout(()=>{ b.textContent='Copy'; b.classList.remove('ok'); }, 2000);
-  });
-}
-
-async function connect(){
-  const raw = document.getElementById('inp').value.trim();
-  const st  = document.getElementById('st');
-  const btn = document.getElementById('btn');
-  if(!raw){ st.textContent='Paste your credentials first.'; st.className='status err'; return; }
-
-  let payload;
-  try { payload = JSON.parse(raw); }
-  catch { payload = { t: raw }; }
-
-  btn.disabled=true; btn.textContent='Connecting...'; st.textContent='';
-  try{
-    const r = await fetch('/callback',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const d = await r.json();
-    if(d.ok){
-      st.textContent='✓ Connected! You can close this tab.';
-      st.className='status ok';
-      btn.textContent='Connected ✓';
-    } else { throw new Error(d.error||'Unknown error'); }
-  } catch(e){
-    st.textContent='Error: '+e.message;
-    st.className='status err';
-    btn.disabled=false; btn.textContent='Connect';
-  }
-}
-
-async function autoDetect(){
-  const st=document.getElementById('st'), ab=document.getElementById('abtn');
-  ab.disabled=true; ab.textContent='Detecting…'; st.textContent='';
-  try{
-    const r=await fetch('/auto-cookies',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-    const d=await r.json();
-    if(d.ok && d.token){
-      document.getElementById('inp').value=JSON.stringify({t:d.token,c:Object.entries(d.cookies).map(([k,v])=>k+'='+v).join('; ')});
-      st.textContent='✓ Cookies found — press Connect.'; st.className='status ok';
-    } else {
-      st.textContent='No DeepSeek cookies found — log in first, then try again.'; st.className='status err';
-    }
-  } catch(e){ st.textContent='Error: '+e.message; st.className='status err'; }
-  ab.disabled=false; ab.textContent='⚡ Auto-detect from browser';
-}
-
-window.open('https://chat.deepseek.com','_blank');
-document.getElementById('inp').addEventListener('keydown', e=>{ if(e.key==='Enter') connect(); });
-</script>
-</body>
-</html>"""
-
-
 def _login_terminal(cfg: dict) -> tuple:
-    print(f"\n{bold('DeepSeek Login')} {dim('(terminal mode)')}")
+    print(f"\n{bold('DeepSeek Login')}")
     print()
-    print("  1. Open  https://chat.deepseek.com  in your browser and log in")
+    print("  1. Open  https://chat.deepseek.com  and log in")
     print()
-    print("  2. Get your token using one of:")
+    print(f"  {c(CYAN, 'F12 → Console')} on chat.deepseek.com — paste and press Enter:")
+    js = "console.log(JSON.stringify({t:JSON.parse(localStorage.getItem('userToken')).value,c:document.cookie}))"
+    print(f"    {c(YELLOW, js)}")
     print()
-    print(f"  {c(CYAN,'Android Chrome / Kiwi Browser')} — type in address bar:")
-    js_alert = "javascript:prompt('Copy token:',JSON.parse(localStorage.getItem('userToken')).value+'|||'+document.cookie)"
-    print(f"    {c(YELLOW, js_alert)}")
+    print(f"  {c(CYAN, 'Android (address bar)')}:")
+    js_bar = "javascript:prompt('token:',JSON.parse(localStorage.getItem('userToken')).value+'|||'+document.cookie)"
+    print(f"    {c(YELLOW, js_bar)}")
     print()
-    print(f"  {c(CYAN,'Firefox / any DevTools console')}:")
-    js_copy  = "console.log(JSON.stringify({t:JSON.parse(localStorage.getItem('userToken')).value,c:document.cookie}))"
-    print(f"    {c(YELLOW, js_copy)}")
-    print()
-    print("  3. Paste the result below.")
-    print(f"     {dim('Accepts: plain token  OR  {\"t\":\"...\",\"c\":\"cf_clearance=...\"}')} ")
+    print("  2. Paste the result below.")
+    print(f"     {dim('Accepts: plain token  OR  {\"t\":\"...\",\"c\":\"cookie=...\"}')}")
     print()
 
     raw = input("  Paste here: ").strip()
@@ -708,146 +457,8 @@ def _login_terminal(cfg: dict) -> tuple:
     return token.strip(), cookies, ua
 
 
-def _login_via_html(cfg: dict) -> tuple:
-    result = [None]
-    PORT   = 51423
-
-    class H(BaseHTTPRequestHandler):
-        def log_message(self, *_): pass
-
-        def do_GET(self):
-            body = _LOGIN_HTML.encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_POST(self):
-            if self.path == "/auto-cookies":
-                cookies = _find_browser_cookies()
-                token   = cookies.get("userToken", cookies.get("Authorization", ""))
-                # try to pull token from userToken cookie (often a JSON blob)
-                if token.startswith("{"):
-                    try: token = json.loads(token).get("value", token)
-                    except: pass
-                resp = json.dumps({"ok": bool(cookies), "cookies": cookies,
-                                   "token": token}).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp)))
-                self.end_headers(); self.wfile.write(resp); return
-
-            if self.path != "/callback":
-                self.send_response(404); self.end_headers(); return
-            length = int(self.headers.get("Content-Length", 0))
-            data   = json.loads(self.rfile.read(length))
-            token  = (data.get("t") or data.get("token") or "").strip()
-            cookies_str = (data.get("c") or data.get("cookies") or "").strip()
-            ua     = data.get("ua", "")
-
-            if token:
-                cookies = {}
-                for part in cookies_str.split(";"):
-                    part = part.strip()
-                    if "=" in part:
-                        k, v = part.split("=", 1)
-                        cookies[k.strip()] = v.strip()
-                result[0] = (token, cookies, ua)
-                resp = json.dumps({"ok": True}).encode()
-            else:
-                resp = json.dumps({"ok": False, "error": "empty token"}).encode()
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
-
-    class _S(HTTPServer):
-        allow_reuse_address = True
-    srv = None
-    for _p in range(PORT, PORT + 10):
-        try: srv = _S(("127.0.0.1", _p), H); PORT = _p; break
-        except OSError: continue
-    if srv is None: raise OSError("No port available for login server")
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-
-    url = f"http://localhost:{PORT}"
-    print(f"\n{bold('DeepSeek Login')}")
-    print(f"  Opening {c(CYAN, url)} in your browser…")
-    print(f"  {dim('Waiting — follow the 3 steps shown in the browser.')}")
-    webbrowser.open(url)
-
-    while result[0] is None:
-        time.sleep(0.3)
-
-    srv.shutdown()
-    return result[0]
-
-
-async def _login_via_nodriver() -> tuple:
-    import nodriver as uc
-
-    print(f"\n{bold('DeepSeek Login')} {dim('(automated browser)')}")
-    print(f"  {dim('A browser window will open — log in normally, then wait.')}")
-
-    browser = await uc.start(
-        headless     = False,
-        browser_args = ["--window-size=1100,780", "--window-position=100,80"],
-    )
-    page = await browser.get("https://chat.deepseek.com")
-
-    print(f"  {dim('Waiting for login…')} ", end="", flush=True)
-    token = None
-    for _ in range(600):
-        await page.sleep(1)
-        try:
-            token = await page.evaluate(
-                "(()=>{try{return JSON.parse(localStorage.getItem('userToken'))?.value||null;}catch{return null;}})()"
-            )
-            if token:
-                break
-        except Exception:
-            pass
-    print()
-
-    if not token:
-        browser.stop()
-        raise TimeoutError("Login timed out (10 min)")
-
-    cookie_str = await page.evaluate("document.cookie")
-    ua         = await page.evaluate("navigator.userAgent")
-    browser.stop()
-
-    cookies = {}
-    for part in (cookie_str or "").split(";"):
-        part = part.strip()
-        if "=" in part:
-            k, v = part.split("=", 1)
-            cookies[k.strip()] = v.strip()
-
-    return token, cookies, ua
-
-
-def _has_display() -> bool:
-    for var in ("SSH_CLIENT", "SSH_TTY", "SSH_CONNECTION"):
-        if os.environ.get(var): return False
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"): return False
-    return not IS_TERMUX and not IS_ANDROID
-
 def do_login(cfg: dict):
-    if IS_TERMUX or not _has_display():
-        token, cookies, ua = _login_terminal(cfg)
-    else:
-        try:
-            import nodriver  # noqa
-            import asyncio
-            token, cookies, ua = asyncio.run(_login_via_nodriver())
-        except Exception:
-            token, cookies, ua = _login_via_html(cfg)
-
+    token, cookies, ua = _login_terminal(cfg)
     cfg["auth_token"] = token
     save_cfg(cfg)
     save_cookies(cookies, ua or "")
