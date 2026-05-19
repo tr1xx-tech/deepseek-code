@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.8"
+VERSION   = "0.9"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1346,6 +1346,9 @@ MENU_H = 8   # fixed number of lines reserved for the menu block
 def _cmd_matches(text: str):
     if not text.startswith("/"):
         return []
+    # once user types a space (adding arguments) — hide menu
+    if " " in text:
+        return []
     q = text[1:].lower()
     if not q:
         return list(_CMDS)
@@ -1808,11 +1811,14 @@ def main():
                         mn = next(n for k,n,_ in _MODELS if k==arg)
                         print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
                     else:
+                        # no arg or unrecognised arg — open picker
                         chosen = _pick_model(cfg["model"])
                         if chosen:
                             cfg["model"] = chosen; save_cfg(cfg)
                             mn = next(n for k,n,_ in _MODELS if k==chosen)
                             print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
+                        else:
+                            print(f"  {c(DIM, _MNAMES.get(cfg['model'], cfg['model']))}")
 
                 elif cmd == "thinking":
                     v = toggle("thinking", arg)
