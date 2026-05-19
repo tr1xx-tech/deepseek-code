@@ -1428,8 +1428,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         return c(DBLUE, "─" * _cols())
 
     def _draw_plain(text: str):
-        # print ❯ line + bottom bar, cursor back on ❯ line
-        _flush(f"\r\033[K{PR}{text}\r\n\033[K{_bar()}\033[1A\r{PR}{text}")
+        _flush(f"\r\033[K{PR}{text}")
 
     def _reserve_menu():
         nonlocal reserved
@@ -1472,11 +1471,8 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _done(text: str):
         if reserved:
             _clear_menu(text)
-        # move past ❯ line and bottom bar, cursor on fresh line below
-        _flush(f"\r\033[K{PR}{text}\r\n\033[K{_bar()}\r\n\033[?25h")
+        _flush(f"\r\033[K{PR}{text}\r\n\033[?25h")
 
-    # Initial draw: top bar + ❯ line + bottom bar, cursor on ❯ line
-    _flush(f"{_bar()}\r\n")
     _draw_plain("")
     try:
         _tty_mod.setraw(fd)
@@ -1848,12 +1844,17 @@ def main():
             save_cfg(cfg); return "on" if cfg[key] else "off"
 
 
+        def _bar():
+            return c(DBLUE, "─" * _cols())
+
         while True:
             try:
+                sys.stdout.write(_bar() + "\n"); sys.stdout.flush()
                 line = _prompt_with_autocomplete().strip()
             except (KeyboardInterrupt, EOFError):
                 print(f"\n{c(DIM, 'bye')}")
                 break
+            sys.stdout.write(_bar() + "\n"); sys.stdout.flush()
             if not line: continue
 
             if line.startswith("/"):
