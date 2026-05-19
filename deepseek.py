@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.31"
+VERSION   = "0.32"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -569,14 +569,14 @@ hr{border:none;border-top:1px solid #1e1e1e;margin:28px 0}
     <div class="num">2</div>
     <div class="sb">
       <h3>Run this in DevTools Console</h3>
-      <p>Press <b>F12</b> → Console, paste and press Enter:</p>
+      <p>Open <b>chat.deepseek.com</b>, press <b>F12</b> → Console, paste and press Enter:</p>
       <div class="code" onclick="copyCode(this)">
         <div class="code-row">
-          <span id="jscmd">copy(JSON.stringify({t:JSON.parse(localStorage.getItem("userToken")).value,c:document.cookie}))</span>
+          <span id="jscmd">console.log(JSON.stringify({t:JSON.parse(localStorage.getItem("userToken")).value,c:document.cookie}))</span>
           <button class="cp" tabindex="-1">Copy</button>
         </div>
       </div>
-      <p style="margin-top:7px">This copies your credentials to clipboard.</p>
+      <p style="margin-top:7px">The result appears in the console — copy it and paste below.</p>
     </div>
   </div>
 
@@ -584,7 +584,7 @@ hr{border:none;border-top:1px solid #1e1e1e;margin:28px 0}
     <div class="num">3</div>
     <div class="sb">
       <h3>Paste here and connect</h3>
-      <p>Paste the copied text into the field below:</p>
+      <p>Paste the JSON from the console into the field below:</p>
       <input id="inp" type="text" placeholder='{"t":"eyJ...","c":"cf_clearance=..."}' autocomplete="off" spellcheck="false"/>
     </div>
   </div>
@@ -669,7 +669,7 @@ def _login_terminal(cfg: dict) -> tuple:
     print(f"    {c(YELLOW, js_alert)}")
     print()
     print(f"  {c(CYAN,'Firefox / any DevTools console')}:")
-    js_copy  = "copy(JSON.stringify({t:JSON.parse(localStorage.getItem('userToken')).value,c:document.cookie}))"
+    js_copy  = "console.log(JSON.stringify({t:JSON.parse(localStorage.getItem('userToken')).value,c:document.cookie}))"
     print(f"    {c(YELLOW, js_copy)}")
     print()
     print("  3. Paste the result below.")
