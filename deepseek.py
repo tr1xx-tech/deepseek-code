@@ -1029,7 +1029,6 @@ class Agent:
                 if chunk.get("finish_reason") == "stop":
                     mid = chunk.get("message_id")
                     if mid: self.parent_id = mid
-                _draw_input_field()
         except Exception as e:
             print(c(RED, f"\nStream error: {e}"))
         print()
@@ -1277,16 +1276,14 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
 
 def _show_welcome(cfg, chat_id, chat_title, user_name=""):
     _cls()
-    _set_scroll_region()
     def _render():
         cols = _cols()
         return ("\n" +
                 _box(_welcome_lines(cfg, chat_id, chat_title, user_name),
-                     title=f"DeepSeek Code  v{VERSION}", close=False) +
+                     title=f"DeepSeek Code  v{VERSION}") +
                 "\n")
     _live_state["fn"] = _render
     print(_render(), end="", flush=True)
-    _draw_input_field()
 
 def _manual_update():
     """Check for update on demand (/update command)."""
@@ -1416,61 +1413,69 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     except ImportError:
         return input()
 
-    fd        = sys.stdin.fileno()
-    old_attr  = termios.tcgetattr(fd)
-    buf       = []
-    sel       = 0
-    menu_open = False
-    SEL_COL   = "\033[38;5;75m"
-    PR        = c(BBLUE+BOLD, "❯") + " "
+    fd       = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+    buf      = []
+    sel      = 0
+    reserved = False   # menu block reserved below cursor
+    SEL_COL  = "\033[38;5;75m"
+    PR       = c(BBLUE+BOLD, "❯") + " "
 
     def _flush(s: str):
         sys.stdout.write(s); sys.stdout.flush()
 
-    def _redraw(text: str):
-        nonlocal menu_open
-        rows = _rows(); cols = _cols()
-        bar  = c(DBLUE, "─" * cols)
-        hits = _cmd_matches(text) if text.startswith("/") else []
+    def _bar():
+        return c(DBLUE, "─" * _cols())
+
+    # Draw: ❯ line + bottom bar on next line, cursor stays on ❯ line
+    def _draw_plain(text: str):
+        _flush(f"\r\033[K{PR}{text}\r\n\033[K{_bar()}\033[1A\r{PR}{text}")
+
+    def _reserve_menu():
+        nonlocal reserved
+        if reserved:
+            return
+        _flush("\033[?25l")
+        _flush("\r\n" * MENU_H)
+        _flush(f"\033[{MENU_H}A\r")
+        reserved = True
+
+    def _render_menu(text: str):
+        cols = _cols()
         q    = text[1:] if text.startswith("/") else ""
-        parts = ["\0337\033[?25l"]  # save cursor, hide cursor
-
-        if hits:
-            menu_open = True
-            menu_top  = rows - 3 - MENU_H
-            for i in range(MENU_H):
-                r = menu_top + i + 1
-                if i < len(hits):
-                    cmd, desc = hits[i]
-                    if i == sel:
-                        row = f" {c(SEL_COL,'❯')} {_hl(cmd,'/' + q if q else '',SEL_COL)}  {_hl(desc,q,SEL_COL)}"
-                    else:
-                        row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
-                    row += " " * max(0, cols - _vis_len(row) - 1)
+        hits = _cmd_matches(text)
+        sel2 = max(0, min(sel, len(hits)-1)) if hits else 0
+        out  = [f"\r\033[K{PR}{text}"]
+        for i in range(MENU_H):
+            if i < len(hits):
+                cmd, desc = hits[i]
+                if i == sel2:
+                    row = f" {c(SEL_COL,'❯')} {_hl(cmd,'/' + q if q else '',SEL_COL)}  {_hl(desc,q,SEL_COL)}"
                 else:
-                    row = ""
-                parts.append(f"\033[{r};1H\033[K{row}")
-        elif menu_open:
-            menu_top = rows - 3 - MENU_H
-            for i in range(MENU_H):
-                parts.append(f"\033[{menu_top+i+1};1H\033[K")
-            menu_open = False
+                    row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
+                row += " " * max(0, cols - _vis_len(row) - 1)
+            else:
+                row = ""
+            out.append(f"\r\033[K{row}")
+        _flush("\r\n".join(out))
+        _flush(f"\033[{MENU_H}A\r{PR}{text}")
 
-        parts.append(f"\033[{rows-2};1H\033[K{bar}")
-        parts.append(f"\033[{rows-1};1H\033[K{PR}{text}")
-        parts.append(f"\033[{rows};1H\033[K{bar}")
-        vis = _vis_len(PR) + _vis_len(text) + 1
-        parts.append(f"\033[{rows-1};{vis}H\033[?25h")
-        _flush("".join(parts))
+    def _clear_menu(text: str):
+        nonlocal reserved
+        out = [f"\r\033[K{PR}{text}"]
+        for _ in range(MENU_H):
+            out.append("\r\033[K")
+        _flush("\r\n".join(out))
+        _flush(f"\033[{MENU_H}A\r\033[K")
+        reserved = False
 
     def _done(text: str):
-        rows = _rows()
-        if menu_open:
-            menu_top = rows - 3 - MENU_H
-            _flush("".join(f"\033[{menu_top+i+1};1H\033[K" for i in range(MENU_H)))
-        _flush(f"\033[{rows-3};1H\033[?25h")
+        if reserved:
+            _clear_menu(text)
+        _flush(f"\r\033[K{PR}{text}\r\n\033[?25h")
 
-    _redraw("")
+    # Initial draw
+    _draw_plain("")
     try:
         _tty_mod.setraw(fd)
         while True:
@@ -1480,18 +1485,21 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                 try:    seq = os.read(fd, 2)
                 except: seq = b''
                 if seq == b'[A':
-                    if _cmd_matches("".join(buf)):
-                        sel = max(0, sel - 1); _redraw("".join(buf))
+                    hits = _cmd_matches("".join(buf))
+                    if hits:
+                        sel = max(0, sel - 1)
+                        _render_menu("".join(buf))
                 elif seq == b'[B':
                     hits = _cmd_matches("".join(buf))
                     if hits:
-                        sel = min(len(hits)-1, sel+1); _redraw("".join(buf))
+                        sel = min(len(hits)-1, sel+1)
+                        _render_menu("".join(buf))
                 continue
 
             if ch in (b'\r', b'\n'):
                 text = "".join(buf)
                 hits = _cmd_matches(text)
-                if menu_open and hits:
+                if reserved and hits:
                     text = hits[min(sel, len(hits)-1)][0]
                 _done(text)
                 return text
@@ -1502,12 +1510,20 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             if ch == b'\t':
                 hits = _cmd_matches("".join(buf))
                 if hits:
-                    buf = list(hits[sel % len(hits)][0]); sel = 0; _redraw("".join(buf))
+                    buf = list(hits[sel % len(hits)][0]); sel = 0
+                    _reserve_menu(); _render_menu("".join(buf))
                 continue
 
             if ch in (b'\x7f', b'\x08'):
                 if buf:
-                    buf.pop(); sel = 0; _redraw("".join(buf))
+                    buf.pop(); sel = 0
+                    text = "".join(buf)
+                    if text.startswith("/"):
+                        _reserve_menu(); _render_menu(text)
+                    else:
+                        if reserved:
+                            _clear_menu(text)
+                        _draw_plain(text)
                 continue
 
             b0 = ch[0]
@@ -1521,7 +1537,14 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             try:    char = ch.decode('utf-8')
             except: continue
             if char < ' ': continue
-            buf.append(char); sel = 0; _redraw("".join(buf))
+            buf.append(char); sel = 0
+            text = "".join(buf)
+            if text.startswith("/"):
+                _reserve_menu(); _render_menu(text)
+            else:
+                if reserved:
+                    _clear_menu(text)
+                _draw_plain(text)
 
     finally:
         sys.stdout.write("\033[?25h"); sys.stdout.flush()
@@ -1748,7 +1771,7 @@ def main():
     ensure_wasm()
     _enter_app()
 
-    # SIGWINCH: redraw welcome box + input field on resize
+    # SIGWINCH: redraw welcome box on resize
     def _sigwinch_handler(sig, frame):
         if not sys.stdout.isatty():
             return
@@ -1763,7 +1786,6 @@ def main():
                     out.append(f"\033[{i+1};1H\033[K{ln}".encode())
                 out.append(b"\033[?25h\0338")
                 os.write(1, b"".join(out))
-            _draw_input_field()
         except Exception:
             pass
     try:
@@ -1824,16 +1846,16 @@ def main():
             save_cfg(cfg); return "on" if cfg[key] else "off"
 
 
+        bar = lambda: c(DBLUE, "─" * _cols())
+
         while True:
-            _set_scroll_region()
-            _draw_input_field()
             try:
+                sys.stdout.write(bar() + "\n"); sys.stdout.flush()
                 line = _prompt_with_autocomplete().strip()
             except (KeyboardInterrupt, EOFError):
-                _clear_scroll_region()
                 print(f"\n{c(DIM, 'bye')}")
                 break
-            _clear_scroll_region()
+            sys.stdout.write(bar() + "\n"); sys.stdout.flush()
             if not line: continue
 
             if line.startswith("/"):
@@ -1923,13 +1945,9 @@ def main():
                 continue
 
             try:
-                _set_scroll_region()
-                _draw_input_field()
                 agent.turn(line)
             except KeyboardInterrupt:
                 print(f"\n{c(YELLOW,'[interrupted]')}")
-            finally:
-                _clear_scroll_region()
 
 
     finally:
