@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.29"
+VERSION   = "0.30"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1466,12 +1466,23 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     menu_open = False
 
     def _done(text: str):
-        # Clear top bar, show gray text only (no ❯), clear bottom bar
-        gray_text = c(DIM, text) if text else ""
-        _flush(f"\033[1A\r\033[K"      # go up to top bar row, clear it
-               f"\r\n\r\033[K{gray_text}"  # down to ❯ row, gray text (no PR)
-               f"\r\n\033[K"           # down to bottom bar row, clear it
-               f"\033[1A\r\n")         # back to text row, \r\n → next line
+        # Clear top bar; show user text white-on-dark-gray full-width; clear bottom bar
+        BG  = "\033[48;5;235m"   # dark gray background
+        FG  = "\033[97m"          # bright white text
+        if text:
+            cols     = _cols()
+            # pad each line of text to full terminal width
+            lines    = text.split("\n")
+            rendered = "\r\n".join(
+                f"{BG}{FG}{ln}{' ' * max(0, cols - len(ln))}{R}"
+                for ln in lines
+            )
+        else:
+            rendered = ""
+        _flush(f"\033[1A\r\033[K"           # go up to top bar row, clear it
+               f"\r\n\r\033[K{rendered}"    # down to ❯ row, styled text
+               f"\r\n\033[K"               # down to bottom bar row, clear it
+               f"\033[1A\r\n")             # back to text row, \r\n → next line
         _flush("\033[?25h")
 
     try:
