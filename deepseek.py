@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.17"
+VERSION   = "0.18"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1620,25 +1620,29 @@ def _pick_chat(agent) -> dict | None:
 
     fd       = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
-    N        = len(entries)
     sel      = next((i for i, e in enumerate(entries) if e["id"] == agent.chat_id), 0)
-    H        = N + 2   # top sep + N rows + bottom sep
 
     def _w(): return sys.stdout.write
     def _flush(): sys.stdout.flush()
 
-    def _render():
+    def _H(): return len(entries) + 2   # top sep + rows + bottom sep
+
+    def _render(confirm_del=False):
+        H = _H()
         W = _cols()
         out = []
-        out.append(f"\r\033[K{c(DBLUE, '── chats ' + '─' * max(0, W - 10))}")
+        hint = c(DIM, "  d·delete") if not confirm_del else ""
+        out.append(f"\r\033[K{c(DBLUE, '── chats ──')} {hint}")
         for i, e in enumerate(entries):
             is_cur = e["id"] == agent.chat_id
             title  = e["title"][:W - 8]
             if i == sel:
-                marker = c("\033[38;5;75m", "❯")
-                row    = f" {marker} {c('\033[38;5;75m', ('◆ ' if is_cur else '') + title)}"
+                if confirm_del:
+                    row = f" {c(RED, '✗')} {c(RED, ('◆ ' if is_cur else '') + title)}  {c(DIM, 'delete? [y/n]')}"
+                else:
+                    row = f" {c('\033[38;5;75m', '❯')} {c('\033[38;5;75m', ('◆ ' if is_cur else '') + title)}"
             else:
-                row    = f"   {c(DIM, ('◆ ' if is_cur else '') + title)}"
+                row = f"   {c(DIM, ('◆ ' if is_cur else '') + title)}"
             row += " " * max(0, W - _vis_len(row) - 1)
             out.append(f"\r\033[K{row}")
         out.append(f"\r\033[K{c(DBLUE, '─' * max(0, W - 1))}")
@@ -1647,33 +1651,73 @@ def _pick_chat(agent) -> dict | None:
         _flush()
 
     def _erase():
+        H = _H()
         for i in range(H):
             _w()(f"\r\033[K")
             if i < H - 1: _w()("\n")
         _w()(f"\033[{H - 1}A\r\033[K")
         _flush()
 
-    _w()("\033[?25l")
-    _w()("\n" * H)
-    _w()(f"\033[{H}A\r")
-    _flush()
+    def _reserve():
+        H = _H()
+        _w()("\033[?25l")
+        _w()("\n" * H)
+        _w()(f"\033[{H}A\r")
+        _flush()
+
+    _reserve()
     _render()
 
     try:
         _tty_mod.setraw(fd)
+        confirm_del = False
         while True:
             ch = os.read(fd, 1)
             if ch == b'\x1b':
                 try:    seq = os.read(fd, 2)
                 except: seq = b''
+                confirm_del = False
                 if seq == b'[A':   sel = max(0, sel - 1)
-                elif seq == b'[B': sel = min(N - 1, sel + 1)
+                elif seq == b'[B': sel = min(len(entries) - 1, sel + 1)
                 _render()
                 continue
+
+            if confirm_del:
+                if ch in (b'y', b'Y'):
+                    target = entries[sel]
+                    # remove from list first, adjust sel
+                    entries.pop(sel)
+                    sel = max(0, min(sel, len(entries) - 1))
+                    confirm_del = False
+                    # do the actual delete (after exiting raw so API can run)
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+                    agent.client.delete_chat(target["id"])
+                    _remove_local_chat(target["id"])
+                    if target["id"] == agent.chat_id:
+                        agent._new_session()
+                    # re-enter raw
+                    _tty_mod.setraw(fd)
+                    if not entries:
+                        _erase()
+                        _w()("\033[?25h"); _flush()
+                        return None
+                    _erase()
+                    _reserve()
+                    _render()
+                else:
+                    confirm_del = False
+                    _render()
+                continue
+
+            if ch == b'd':
+                confirm_del = True
+                _render(confirm_del=True)
+                continue
+
             if ch in (b'\r', b'\n'):
                 _erase()
                 _w()("\033[?25h"); _flush()
-                return entries[sel]
+                return entries[sel] if entries else None
             if ch in (b'\x03', b'\x04', b'q'):
                 _erase()
                 _w()("\033[?25h"); _flush()
