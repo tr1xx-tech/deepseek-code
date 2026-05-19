@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.9"
+VERSION   = "0.10"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1119,30 +1119,43 @@ def _pick_model(current: str) -> str | None:
     old_attr = termios.tcgetattr(fd)
     keys     = [m[0] for m in _MODELS]
     sel      = keys.index(current) if current in keys else 0
-    H        = len(_MODELS) + 2   # menu height: separator + items + separator
+    N        = len(_MODELS)
+    H        = N + 2   # top separator + N rows + bottom separator
 
-    def _flush(s: str):
-        sys.stdout.write(s); sys.stdout.flush()
+    def _w(): return sys.stdout.write
+    def _flush(): sys.stdout.flush()
 
     def _render():
         W = _cols()
-        # go to top of block
-        _flush(f"\033[{H}A\r")
-        # separator line
-        _flush(f"\033[K{c(DBLUE, '── model ' + '─' * max(0, W - 9))}\n\r")
+        out = []
+        out.append(f"\r\033[K{c(DBLUE, '── model ' + '─' * max(0, W - 10))}")
         for i, (key, name, desc) in enumerate(_MODELS):
-            is_sel = (i == sel)
-            if is_sel:
+            if i == sel:
                 row = f" {c(BCYAN+BOLD,'❯')} {c(BCYAN+BOLD, name)}  {c(BCYAN, desc)}"
             else:
                 row = f"   {c(DIM, name)}  {c(DIM, desc)}"
-            vl  = _vis_len(row)
-            row += " " * max(0, W - vl - 1)
-            _flush(f"\033[K{row}\n\r")
-        _flush(f"\033[K{c(DBLUE, '─' * max(0, W - 1))}")
+            row += " " * max(0, W - _vis_len(row) - 1)
+            out.append(f"\r\033[K{row}")
+        out.append(f"\r\033[K{c(DBLUE, '─' * max(0, W - 1))}")
+        # join with \n, then move cursor back up to top of block
+        _w()("\n".join(out))
+        _w()(f"\033[{H - 1}A\r")
+        _flush()
 
-    # reserve block
-    _flush("\n" * H)
+    def _erase():
+        # erase all H lines and leave cursor on first line
+        for i in range(H):
+            _w()(f"\r\033[K")
+            if i < H - 1:
+                _w()("\n")
+        _w()(f"\033[{H - 1}A\r\033[K")
+        _flush()
+
+    # reserve H lines, hide cursor
+    _w()("\033[?25l")           # hide cursor
+    _w()("\n" * H)              # push H blank lines
+    _w()(f"\033[{H}A\r")       # go back to top of block
+    _flush()
     _render()
 
     try:
@@ -1152,24 +1165,21 @@ def _pick_model(current: str) -> str | None:
             if ch == b'\x1b':
                 try:    seq = os.read(fd, 2)
                 except: seq = b''
-                if seq == b'[A':   sel = (sel - 1) % len(_MODELS)
-                elif seq == b'[B': sel = (sel + 1) % len(_MODELS)
+                if seq == b'[A':   sel = (sel - 1) % N
+                elif seq == b'[B': sel = (sel + 1) % N
                 _render()
                 continue
             if ch in (b'\r', b'\n'):
-                # erase block
-                _flush(f"\033[{H}A\r")
-                for _ in range(H):
-                    _flush("\033[2K\n")
-                _flush(f"\033[{H}A\r\033[K")
+                _erase()
+                _w()("\033[?25h"); _flush()   # show cursor
                 return keys[sel]
-            if ch in (b'\x03', b'\x04', b'\x1b', b'q'):
-                _flush(f"\033[{H}A\r")
-                for _ in range(H):
-                    _flush("\033[2K\n")
-                _flush(f"\033[{H}A\r\033[K")
+            if ch in (b'\x03', b'\x04', b'q'):
+                _erase()
+                _w()("\033[?25h"); _flush()
+                if ch == b'\x03': raise KeyboardInterrupt
                 return None
     finally:
+        _w()("\033[?25h"); _flush()           # always restore cursor
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
 
@@ -1387,55 +1397,45 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
         sys.stdout.write(s); sys.stdout.flush()
 
     def _reserve():
-        """Print MENU_H blank lines below input, then come back up."""
         nonlocal reserved
         if reserved:
             return
-        # print blank lines to push terminal scroll, then move back up
+        _flush("\033[?25l")              # hide cursor
         _flush("\n" * MENU_H)
         _flush(f"\033[{MENU_H}A\r")
         _flush(prompt_str + "".join(buf))
         reserved = True
 
     def _render(text: str):
-        """Redraw input line + full menu block in-place."""
         hits = _cmd_matches(text)
         q    = text[1:] if text.startswith("/") else ""
-
-        # go to start of input line
-        if reserved:
-            # cursor is on input line; just overwrite from col 0
-            pass
-        _flush(f"\r\033[K{prompt_str}{text}")
-
-        # write each menu line
+        out  = [f"\r\033[K{prompt_str}{text}"]
         for i in range(MENU_H):
-            _flush("\n\r\033[K")   # next line, clear it
             if i < len(hits):
                 cmd, desc = hits[i]
                 cmd_hl  = _hl(cmd,  "/" + q if q else "")
                 desc_hl = _hl(desc, q)
-                is_sel  = (i == sel % len(hits) if hits else False)
+                is_sel  = (i == sel % len(hits))
                 if is_sel:
-                    # full-row highlight: blue background via reverse+color
-                    row = f" {c(BCYAN+BOLD, '❯')} {c(BCYAN+BOLD, cmd_hl)}  {c(BCYAN, desc_hl)}"
+                    row = f" {c(BCYAN+BOLD,'❯')} {c(BCYAN+BOLD, cmd_hl)}  {c(BCYAN, desc_hl)}"
                 else:
                     row = f"   {c(DIM, cmd_hl)}  {c(DIM, desc_hl)}"
-                vl  = _vis_len(row)
-                row += " " * max(0, W - vl - 1)
-                _flush(row)
-
-        # move cursor back up to input line
+                row += " " * max(0, W - _vis_len(row) - 1)
+            else:
+                row = ""
+            out.append(f"\r\033[K{row}")
+        _flush("\n".join(out))
+        # cursor is now on last menu line; move back up to input line
         _flush(f"\033[{MENU_H}A\r")
         _flush(prompt_str + text)
 
     def _clear_and_return(text: str):
-        """Erase menu block, move to input line end, print newline."""
-        _flush(f"\r\033[K{prompt_str}{text}")
+        out = [f"\r\033[K{prompt_str}{text}"]
         for _ in range(MENU_H):
-            _flush("\n\r\033[K")
+            out.append("\r\033[K")
+        _flush("\n".join(out))
         _flush(f"\033[{MENU_H}A\r\033[K")
-        _flush("\n")
+        _flush("\033[?25h\n")            # show cursor, newline
 
     _flush(prompt_str)
     try:
@@ -1523,6 +1523,7 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
                     _flush(f"\r\033[K{prompt_str}{text}")
 
     finally:
+        sys.stdout.write("\033[?25h"); sys.stdout.flush()  # always restore cursor
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
 
