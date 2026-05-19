@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.28"
+VERSION   = "0.29"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1424,7 +1424,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _flush(s): sys.stdout.write(s); sys.stdout.flush()
 
     # Draw 3-line field: top bar / ❯ row / bottom bar
-    # Cursor ends up on ❯ row (2 lines up from bottom bar)
+    # Cursor ends on ❯ row (one \033[1A from bottom bar)
     sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\r{PR}")
     sys.stdout.flush()
 
@@ -1440,8 +1440,8 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         q    = text[1:] if text.startswith("/") else ""
         hits = _cmd_matches(text)
         sel2 = max(0, min(sel, len(hits)-1)) if hits else 0
-        # Go up past top bar + MENU_H rows, draw menu, redraw top bar, ❯
-        out = [f"\033[{MENU_H + 1}A"]   # up: MENU_H menu rows + top bar
+        # Go up MENU_H rows + top bar, draw menu, redraw top bar + ❯
+        out = [f"\033[{MENU_H + 1}A"]
         for i in range(MENU_H):
             if i < len(hits):
                 cmd, desc = hits[i]
@@ -1453,7 +1453,6 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             else:
                 row = ""
             out.append(f"\r\033[K{row}\r\n")
-        # redraw top bar then ❯
         out.append(f"\r\033[K{_bar()}\r\n\r\033[K{PR}{text}")
         _flush("".join(out))
 
@@ -1467,11 +1466,12 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     menu_open = False
 
     def _done(text: str):
-        # Redraw ❯ line gray, clear bottom bar row, leave cursor on next line
+        # Clear top bar, show gray text only (no ❯), clear bottom bar
         gray_text = c(DIM, text) if text else ""
-        _flush(f"\r\033[K{PR}{gray_text}"   # overwrite ❯ row
-               f"\r\n\033[K"                # move to bottom bar row, clear it
-               f"\033[1A\r\n")              # back up to ❯ row, then \r\n → next line
+        _flush(f"\033[1A\r\033[K"      # go up to top bar row, clear it
+               f"\r\n\r\033[K{gray_text}"  # down to ❯ row, gray text (no PR)
+               f"\r\n\033[K"           # down to bottom bar row, clear it
+               f"\033[1A\r\n")         # back to text row, \r\n → next line
         _flush("\033[?25h")
 
     try:
