@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.21"
+VERSION   = "0.22"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1774,13 +1774,16 @@ def main():
     ensure_wasm()
     _enter_app()
 
-    # SIGWINCH: immediately redraw header in-place (live resize)
+    # SIGWINCH: immediately redraw header + input field in-place (live resize)
     def _sigwinch_handler(sig, frame):
         fn = _live_state.get("fn")
         if fn is None or not sys.stdout.isatty():
             return
         try:
+            cols    = _cols()
             content = fn()
+            # append ❯ line so it also gets redrawn with correct width
+            content += c(BBLUE+BOLD, "❯") + " "
             lines   = content.splitlines()
             out = [b"\0337\033[?25l"]          # DECSC save cursor + hide cursor
             for i, ln in enumerate(lines):
@@ -1851,24 +1854,19 @@ def main():
             save_cfg(cfg); return "on" if cfg[key] else "off"
 
 
-        def _bottom_bar():
-            cols = _cols()
-            sys.stdout.write(c(DBLUE, "─" * cols) + "\n")
-            sys.stdout.flush()
-
-        def _top_bar():
-            cols = _cols()
-            sys.stdout.write(c(DBLUE, "─" * cols) + "\n")
-            sys.stdout.flush()
+        def _bar():
+            return c(DBLUE, "─" * _cols())
 
         while True:
             try:
-                line = _prompt_with_autocomplete(f"{c(BBLUE+BOLD, '❯')} ").strip()
+                line = _prompt_with_autocomplete(
+                    f"{_bar()}\n{c(BBLUE+BOLD, '❯')} "
+                ).strip()
             except (KeyboardInterrupt, EOFError):
                 print(f"\n{c(DIM, 'bye')}")
                 break
-            if not line:
-                _bottom_bar(); _top_bar(); continue
+            sys.stdout.write(_bar() + "\n"); sys.stdout.flush()
+            if not line: continue
 
             if line.startswith("/"):
                 parts = line[1:].split(maxsplit=1)
@@ -1885,11 +1883,11 @@ def main():
 
                 elif cmd == "help":
                     _cls(); print(); print(_help_box()); print()
-                    _bottom_bar(); _top_bar(); continue
+                    continue
 
                 elif cmd == "status":
                     _cls(); print(); print(_status_box(cfg, agent.chat_id, agent.chat_title)); print()
-                    _bottom_bar(); _top_bar(); continue
+                    continue
 
                 elif cmd in ("new", "clear"):
                     agent._new_session()
@@ -1902,7 +1900,7 @@ def main():
                         agent._load_chat(chosen["id"], chosen["title"])
                         _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
                     else:
-                        print(); _bottom_bar(); _top_bar()
+                        print();
                     continue
 
                 elif cmd == "delete":
@@ -1953,14 +1951,15 @@ def main():
 
                 else:
                     print(c(YELLOW, "  unknown command — /help"))
-                _bottom_bar(); _top_bar()
+
                 continue
 
             try:
                 agent.turn(line)
             except KeyboardInterrupt:
                 print(f"\n{c(YELLOW,'[interrupted]')}")
-            _bottom_bar(); _top_bar()
+            sys.stdout.write(_bar() + "\n"); sys.stdout.flush()
+
 
     finally:
         _exit_app()
