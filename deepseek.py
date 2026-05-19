@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.13"
+VERSION   = "0.14"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1376,7 +1376,7 @@ def _hl(text: str, query: str, base: str = "") -> str:
     idx = lo.find(q)
     if idx == -1:
         return _b(text)
-    HL = "\033[38;5;252m"   # light gray — subtle highlight
+    HL = "\033[38;5;75m"    # muted blue — subtle highlight
     return (_b(text[:idx]) +
             c(HL, text[idx:idx+len(query)]) +
             _b(text[idx+len(query):]))
@@ -1418,10 +1418,11 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
             if i < len(hits):
                 cmd, desc = hits[i]
                 is_sel  = (i == sel % len(hits))
+                SEL = "\033[38;5;75m"
                 if is_sel:
-                    cmd_hl  = _hl(cmd,  "/" + q if q else "", base=BCYAN+BOLD)
-                    desc_hl = _hl(desc, q, base=BCYAN)
-                    row = f" {c(BCYAN+BOLD,'❯')} {cmd_hl}  {desc_hl}"
+                    cmd_hl  = _hl(cmd,  "/" + q if q else "", base=SEL)
+                    desc_hl = _hl(desc, q, base=SEL)
+                    row = f" {c(SEL,'❯')} {cmd_hl}  {desc_hl}"
                 else:
                     cmd_hl  = _hl(cmd,  "/" + q if q else "", base=DIM)
                     desc_hl = _hl(desc, q, base=DIM)
