@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.12"
+VERSION   = "0.13"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1376,8 +1376,9 @@ def _hl(text: str, query: str, base: str = "") -> str:
     idx = lo.find(q)
     if idx == -1:
         return _b(text)
+    HL = "\033[38;5;252m"   # light gray — subtle highlight
     return (_b(text[:idx]) +
-            c(BCYAN+BOLD, text[idx:idx+len(query)]) +
+            c(HL, text[idx:idx+len(query)]) +
             _b(text[idx+len(query):]))
 
 def _prompt_with_autocomplete(prompt_str: str) -> str:
