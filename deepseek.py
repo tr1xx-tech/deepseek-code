@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.51"
+VERSION   = "0.52"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -874,7 +874,7 @@ class Agent:
                     if mid: self.parent_id = mid
         except Exception as e:
             print(c(RED, f"\nStream error: {e}"))
-        print()
+        print("\n")
         result = "".join(buf)
         if result:
             _append_history(self.chat_id, "assistant", result)
