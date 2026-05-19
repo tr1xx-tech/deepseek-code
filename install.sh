@@ -135,13 +135,14 @@ has_pkg curl_cffi || {
 
 [ "$IS_TERMUX" = "0" ] && { has_pkg nodriver || pip_install nodriver; }
 
-# ── write ~/.local/bin/deepseek ───────────────────────────────────────────────
+# ── write ~/.local/bin/deepseek & dsk ────────────────────────────────────────
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/deepseek" << EOF
 #!/bin/sh
 exec $PYTHON "$APP" "\$@"
 EOF
 chmod +x "$BIN_DIR/deepseek"
+ln -sf "$BIN_DIR/deepseek" "$BIN_DIR/dsk"
 
 # ── PATH (desktop) ────────────────────────────────────────────────────────────
 if [ "$IS_TERMUX" = "0" ]; then
