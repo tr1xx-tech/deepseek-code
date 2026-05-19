@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.58"
+VERSION   = "0.59"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1526,10 +1526,6 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                     text = hits[min(sel, len(hits)-1)][0]
                 if menu_open:
                     _clear_menu(text); menu_open = False
-                if text and (not _input_history or _input_history[-1] != text):
-                    _input_history.append(text)
-                    if len(_input_history) > 200:
-                        _input_history.pop(0)
                 _done(text)
                 return text
 
