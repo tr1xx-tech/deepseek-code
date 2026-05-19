@@ -35,7 +35,7 @@ printf "\n  ${CYAN}◆${R}  ${CYAN}DeepSeek Code${R}\n\n"
 # ── spinner ───────────────────────────────────────────────────────────────────
 ( while true; do
     for f in '⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏'; do
-        printf "\r  ${CYAN}%s${R}  ${DIM}installing...${R}" "$f"
+        printf "\r  ${CYAN}%s${R}  installing..." "$f"
         sleep 0.08
     done
 done ) &
@@ -158,15 +158,15 @@ fi
 # ── done ──────────────────────────────────────────────────────────────────────
 HL="\033[38;5;75m"
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null
-printf "\r\033[K\n  ${GREEN}✓${R}  ${CYAN}DeepSeek Code installed${R}\n\n"
+printf "\r\033[K\n  ${GREEN}✓${R}  DeepSeek Code installed\n\n"
 
 case ":$PATH:" in
     *":$BIN_DIR:"*)
-        printf "  Run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
+        printf "  ${CYAN}❯${R}  Run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
         ;;
     *)
         printf "  Add to PATH first:\n\n"
         printf "    ${HL}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
-        printf "  Then run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
+        printf "  ${CYAN}❯${R}  Run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
         ;;
 esac
