@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.15"
+VERSION   = "0.16"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1512,6 +1512,15 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
                             _flush(f"\r\033[K{prompt_str}{text}")
                 continue
 
+            # collect full UTF-8 multibyte sequence
+            b0 = ch[0]
+            if b0 >= 0xF0:   extra = 3
+            elif b0 >= 0xE0: extra = 2
+            elif b0 >= 0xC0: extra = 1
+            else:            extra = 0
+            for _ in range(extra):
+                try:    ch += os.read(fd, 1)
+                except: break
             try:
                 char = ch.decode('utf-8')
             except UnicodeDecodeError:
