@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.49"
+VERSION   = "0.50"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -834,15 +834,17 @@ class Agent:
                     pad = max(0, W - len(ln))
                     print(f"{BG_U}{FG_U}{ln}{' ' * pad}{R}")
             else:
-                print(f"{AI_COL}{text}{R}")
+                icon = c(DBLUE, "○")
+                print(f"{icon} {AI_COL}{text}{R}")
         print()
 
     def _stream(self, prompt: str) -> str:
         r1       = self.cfg["model"] == "r1"
         thinking = self.cfg["thinking"] and r1
         search   = self.cfg["search"]
-        buf      = []
-        in_think = False
+        buf        = []
+        in_think   = False
+        first_text = True
 
         print()
 
@@ -860,6 +862,10 @@ class Agent:
                     if in_think:
                         print(f"\n{dim('╰────────────────────────────')}\n", flush=True)
                         in_think = False
+                    if first_text and content:
+                        icon = c(DBLUE, "○")
+                        print(f"{icon} ", end="", flush=True)
+                        first_text = False
                     print(c("\033[38;5;75m", content), end="", flush=True)
                     buf.append(content)
                 elif kind == "title":
@@ -1121,12 +1127,12 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
         "",
     ]
 
-def _show_welcome(cfg, chat_id, chat_title, user_name=""):
+def _show_welcome(cfg, chat_id, chat_title_or_fn, user_name=""):
     _cls()
     def _render():
-        cols = _cols()
+        title = chat_title_or_fn() if callable(chat_title_or_fn) else chat_title_or_fn
         return ("\n" +
-                _box(_welcome_lines(cfg, chat_id, chat_title, user_name),
+                _box(_welcome_lines(cfg, chat_id, title, user_name),
                      title=f"DeepSeek Code  v{VERSION}") +
                 "\n")
     _live_state["fn"] = _render
@@ -1370,21 +1376,11 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     ctrlc_once = [False]
     _ctrlc_timer = [None]
 
-    def _cur_col():
-        rows = prev_rows[0]
-        last = _wrap_rows("".join(buf), _cols())[-1]
-        return (2 + len(last)) if rows == 1 else (len(IND) + len(last))
-
     def _show_ctrlc_hint():
-        rows = prev_rows[0]
-        # cursor is on ❯ row; bottom bar is `rows` lines below; hint goes one more below
-        down = rows + 1
-        _flush(f"\033[{down}B\r\033[K  {c(DIM, 'press ctrl+c again to exit')}\033[{down}A\r\033[{_cur_col()}C")
+        _flush(f"\033[1B\r\033[K  {c(DIM, 'press ctrl+c again to exit')}\033[1A\r\033[{2 + len(''.join(buf))}C")
 
     def _clear_ctrlc_hint():
-        rows = prev_rows[0]
-        down = rows + 1
-        _flush(f"\033[{down}B\r\033[K\033[{down}A\r\033[{_cur_col()}C")
+        _flush(f"\033[1B\r\033[K{_bar()}\033[1A\r\033[{2 + len(''.join(buf))}C")
 
     def _arm_ctrlc_clear():
         if _ctrlc_timer[0]:
@@ -1811,12 +1807,17 @@ def main():
         _running[0] = False
         spin_t.join(timeout=1)
 
-        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+        def _wtitle(): return agent.chat_title
+        def _wuser():  return getattr(agent, "user_name", "")
+
+        def _welcome():
+            _show_welcome(cfg, agent.chat_id, _wtitle, _wuser())
+
+        _welcome()
 
         def toggle(key, arg):
             cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
             save_cfg(cfg); return "on" if cfg[key] else "off"
-
 
         def _bar():
             return c(DBLUE, "─" * _cols())
@@ -1852,18 +1853,18 @@ def main():
 
                 elif cmd in ("new", "clear"):
                     agent._new_session()
-                    _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                    _welcome()
                     continue
 
                 elif cmd == "chats":
                     chosen = _pick_chat(agent)
                     if chosen and chosen.get("new"):
                         agent._new_session()
-                        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                        _welcome()
                     elif chosen:
                         agent._load_chat(chosen["id"], chosen["title"])
                         _cls()
-                        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                        _show_welcome(cfg, agent.chat_id, _wtitle, _wuser())
                         agent.print_history()
                     else:
                         print()
