@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.41"
+VERSION   = "0.42"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1174,14 +1174,30 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     # Cursor is always on the ❯ row after every operation.
 
     prev_rows = [1]  # rows occupied by prompt last draw
+    PAD_R = 1        # right padding on every row
+    IND   = "  "     # left indent for continuation rows (replaces ❯ )
+
+    def _wrap_rows(text: str, cols: int) -> list:
+        """Split text into display rows respecting left indent and right pad."""
+        usable1 = cols - 2 - PAD_R       # first row: after ❯ , before right pad
+        usableN = cols - len(IND) - PAD_R # continuation rows
+        rows = []
+        if not text:
+            return [""]
+        rows.append(text[:usable1])
+        pos = usable1
+        while pos < len(text):
+            rows.append(text[pos:pos + usableN])
+            pos += usableN
+        return rows
 
     def _lc(text: str) -> int:
-        cols = _cols()
-        return max(1, (2 + len(text) + cols - 1) // cols)
+        return len(_wrap_rows(text, _cols()))
 
     def _redraw(text: str):
         cols   = _cols()
-        new_lc = _lc(text)
+        wrows  = _wrap_rows(text, cols)
+        new_lc = len(wrows)
         old_lc = prev_rows[0]
         out    = []
         # go up to first row of prompt
@@ -1193,15 +1209,12 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             out.append("\033[1B\r\033[K")
         if old_lc > 1:
             out.append(f"\033[{old_lc - 1}A")
-        # print PR + text with manual line breaks
-        full  = "  " + text   # "❯ " is 2 chars, replaced by indent for continuation
-        chunk = cols - 2      # first line: cols minus "❯ "
-        out.append(f"\r{PR}{text[:chunk]}")
-        pos = chunk
-        while pos < len(text):
-            out.append(f"\r\n{text[pos:pos + cols]}\033[K")
-            pos += cols
-        # clear any extra rows from previous longer text
+        # print first row
+        out.append(f"\r{PR}{wrows[0]}")
+        # continuation rows
+        for row in wrows[1:]:
+            out.append(f"\r\n{IND}{row}")
+        # clear extra rows from previous longer text
         for _ in range(old_lc - new_lc):
             out.append(f"\033[1B\r\033[K")
         if old_lc - new_lc > 0:
@@ -1250,26 +1263,20 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         cols = _cols()
         rows = prev_rows[0]
         out  = []
-        # go up past top bar + all prompt rows to top bar
-        out.append(f"\033[{rows}A\r\033[K")  # clear top bar
-        # draw styled text rows
+        # go up to top bar
+        out.append(f"\033[{rows}A\r\033[K")
         out.append("\033[1B\r\033[K")
         if text:
-            # rebuild wrapped lines the same way _redraw did
-            chunk   = cols - 2
-            lines   = ["  " + text[:chunk]]
-            pos     = chunk
-            while pos < len(text):
-                lines.append(text[pos:pos + cols])
-                pos += cols
-            for i, ln in enumerate(lines):
+            wrows = _wrap_rows(text, cols)
+            for i, row in enumerate(wrows):
                 if i > 0:
                     out.append("\033[1B\r\033[K")
-                pad = max(0, cols - len(ln))
+                prefix = IND if i > 0 else IND  # both use IND (❯ hidden)
+                ln     = prefix + row
+                pad    = max(0, cols - len(ln))
                 out.append(f"{BG}{FG}{ln}{' ' * pad}{R}")
         # clear bottom bar
         out.append("\033[1B\r\033[K")
-        # back up to last text row, then \r\n → cursor on next line
         out.append("\033[1A\r\n")
         _flush("".join(out))
         _flush("\033[?7h\033[?25h")
