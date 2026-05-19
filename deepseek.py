@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.37"
+VERSION   = "0.38"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1176,17 +1176,18 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         # Cursor on ❯ row → clear line, reprint
         _flush(f"\r\033[K{PR}{text}")
 
+    def _pr_len(): return 2 + len("".join(buf))  # ❯ + space + text
+
     def _redraw_menu(text: str):
         cols = _cols()
         q    = text[1:] if text.startswith("/") else ""
         hits = _cmd_matches(text)
         sel2 = max(0, min(sel, len(hits)-1)) if hits else 0
-        # cursor on ❯ row; go down past bottom bar, draw MENU_H rows, come back
-        out = [f"\r\033[K{PR}{text}"]   # redraw ❯ row first
-        out.append("\033[1B\r\033[K")    # move to bottom bar row, clear
-        out.append(_bar())               # redraw bottom bar
+        out  = [f"\r\033[K{PR}{text}"]       # redraw ❯ row
+        out.append("\033[1B\r\033[K")          # bottom bar row
+        out.append(_bar())
         for i in range(MENU_H):
-            out.append("\033[1B\r\033[K")  # next menu row
+            out.append("\033[1B\r\033[K")
             if i < len(hits):
                 cmd, desc = hits[i]
                 if i == sel2:
@@ -1195,18 +1196,17 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                     row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
                 row += " " * max(0, cols - _vis_len(row) - 1)
                 out.append(row)
-        # return cursor to ❯ row (1 bottom bar + MENU_H rows below)
-        out.append(f"\033[{MENU_H + 1}A\r")
+        # return to ❯ row, position cursor after typed text
+        out.append(f"\033[{MENU_H + 1}A\r\033[{_pr_len()}C")
         _flush("".join(out))
 
     def _clear_menu(text: str):
-        # go down past bottom bar, clear MENU_H rows, come back
         out = [f"\r\033[K{PR}{text}"]
         out.append("\033[1B\r\033[K")
         out.append(_bar())
         for _ in range(MENU_H):
             out.append("\033[1B\r\033[K")
-        out.append(f"\033[{MENU_H + 1}A\r")
+        out.append(f"\033[{MENU_H + 1}A\r\033[{_pr_len()}C")
         _flush("".join(out))
 
     menu_open = False
