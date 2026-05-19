@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.25"
+VERSION   = "0.26"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1423,83 +1423,55 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _bar(): return c(DBLUE, "─" * _cols())
     def _flush(s): sys.stdout.write(s); sys.stdout.flush()
 
-    # Draw 2-line field: ❯ row + bottom bar; move cursor back up to ❯ row
+    # Draw 2-line field: ❯ row + bottom bar; cursor sits on ❯ row after PR
+    # Using \r\n in normal (cooked) mode — safe before setraw
     sys.stdout.write(f"{PR}\r\n{_bar()}\033[1A\r{PR}")
     sys.stdout.flush()
 
-    # Row number of the ❯ line (1-indexed); bottom bar is row+1
-    import fcntl, struct, termios as _termios_mod
-    def _cursor_row():
-        # Query cursor position via ESC[6n
-        sys.stdout.write("\033[6n"); sys.stdout.flush()
-        resp = b""
-        import select
-        while True:
-            if select.select([fd], [], [], 0.1)[0]:
-                resp += os.read(fd, 16)
-                if b'R' in resp:
-                    break
-            else:
-                break
-        m = re.search(rb'\[(\d+);(\d+)R', resp)
-        return int(m.group(1)) if m else None
-
-    prompt_row = _cursor_row()  # row of ❯ line
+    # All positioning is relative — no ESC[6n needed.
+    # Cursor is always on the ❯ row after every operation.
 
     def _redraw(text: str):
-        """Overwrite only the ❯ line in-place."""
-        if prompt_row:
-            _flush(f"\033[{prompt_row};1H\033[K{PR}{text}")
-        else:
-            _flush(f"\r\033[K{PR}{text}")
+        # Cursor on ❯ row → clear line, reprint
+        _flush(f"\r\033[K{PR}{text}")
 
     def _redraw_menu(text: str):
         cols = _cols()
         q    = text[1:] if text.startswith("/") else ""
         hits = _cmd_matches(text)
         sel2 = max(0, min(sel, len(hits)-1)) if hits else 0
-        # menu rows go above the top bar (prompt_row-1)
-        if prompt_row:
-            out = []
-            for i in range(MENU_H):
-                r = prompt_row - MENU_H + i
-                if r < 1: continue
-                if i < len(hits):
-                    cmd, desc = hits[i]
-                    if i == sel2:
-                        row = f" {c(SEL_COL,'❯')} {_hl(cmd,'/' + q if q else '',SEL_COL)}  {_hl(desc,q,SEL_COL)}"
-                    else:
-                        row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
-                    row += " " * max(0, cols - _vis_len(row) - 1)
+        # Build output: go up MENU_H lines, draw each menu row, come back
+        out = [f"\033[{MENU_H}A"]   # cursor up MENU_H rows
+        for i in range(MENU_H):
+            if i < len(hits):
+                cmd, desc = hits[i]
+                if i == sel2:
+                    row = f" {c(SEL_COL,'❯')} {_hl(cmd,'/' + q if q else '',SEL_COL)}  {_hl(desc,q,SEL_COL)}"
                 else:
-                    row = ""
-                out.append(f"\033[{r};1H\033[K{row}")
-            out.append(f"\033[{prompt_row};1H\033[K{PR}{text}")
-            _flush("".join(out))
-        else:
-            _redraw(text)
+                    row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
+                row += " " * max(0, cols - _vis_len(row) - 1)
+            else:
+                row = ""
+            out.append(f"\r\033[K{row}\r\n")  # clear + print + next line
+        # now cursor is on ❯ row
+        out.append(f"\r\033[K{PR}{text}")
+        _flush("".join(out))
 
     def _clear_menu(text: str):
-        if prompt_row:
-            out = []
-            for i in range(MENU_H):
-                r = prompt_row - MENU_H + i
-                if r >= 1:
-                    out.append(f"\033[{r};1H\033[K")
-            out.append(f"\033[{prompt_row};1H\033[K{PR}{text}")
-            _flush("".join(out))
+        out = [f"\033[{MENU_H}A"]
+        for _ in range(MENU_H):
+            out.append("\r\033[K\r\n")
+        out.append(f"\r\033[K{PR}{text}")
+        _flush("".join(out))
 
     menu_open = False
 
     def _done(text: str):
-        # Redraw ❯ line with text in gray, clear bottom bar, cursor to next line
+        # Redraw ❯ line gray, clear bottom bar row, leave cursor on next line
         gray_text = c(DIM, text) if text else ""
-        if prompt_row:
-            _flush(f"\033[{prompt_row};1H\033[K{PR}{gray_text}"
-                   f"\033[{prompt_row+1};1H\033[K"
-                   f"\033[{prompt_row};1H\r\n")
-        else:
-            _flush(f"\r\033[K{PR}{gray_text}\r\n")
+        _flush(f"\r\033[K{PR}{gray_text}"   # overwrite ❯ row
+               f"\r\n\033[K"                # move to bottom bar row, clear it
+               f"\033[1A\r\n")              # back up to ❯ row, then \r\n → next line
         _flush("\033[?25h")
 
     try:
