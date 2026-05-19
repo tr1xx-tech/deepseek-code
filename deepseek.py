@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.55"
+VERSION   = "0.56"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -838,42 +838,70 @@ class Agent:
         print()
 
     def _stream(self, prompt: str) -> str:
-        thinking = self.cfg["model"] == "r1"
-        search   = self.cfg["search"]
+        thinking   = self.cfg["model"] == "r1"
+        search     = self.cfg["search"]
         buf        = []
         in_think   = False
         first_text = True
+        cancelled  = threading.Event()
+        done       = threading.Event()
+        err        = [None]
 
         print()
 
-        try:
-            for chunk in self.client.stream(
-                self.chat_id, prompt, self.parent_id, thinking, search
-            ):
-                kind, content = chunk["type"], chunk["content"]
-                if kind == "thinking":
-                    if not in_think:
-                        print(f"{dim('╭─ thinking ─────────────────')}", flush=True)
-                        in_think = True
-                    print(dim(content), end="", flush=True)
-                elif kind == "text":
-                    if in_think:
-                        print(f"\n{dim('╰────────────────────────────')}\n", flush=True)
-                        in_think = False
-                    if first_text and content:
-                        print(f"{c(DBLUE, '●')} ", end="", flush=True)
-                        first_text = False
-                    print(c("\033[38;5;75m", content.replace("\n", "\n  ")), end="", flush=True)
-                    buf.append(content)
-                elif kind == "title":
-                    self.chat_title = content
-                    _update_chat_title(self.chat_id, content)
-                if chunk.get("finish_reason") == "stop":
-                    mid = chunk.get("message_id")
-                    if mid: self.parent_id = mid
-        except Exception as e:
-            print(c(RED, f"\nStream error: {e}"))
-        print()
+        def _run():
+            nonlocal in_think, first_text
+            try:
+                for chunk in self.client.stream(
+                    self.chat_id, prompt, self.parent_id, thinking, search
+                ):
+                    if cancelled.is_set():
+                        break
+                    kind, content = chunk["type"], chunk["content"]
+                    if kind == "thinking":
+                        if not in_think:
+                            sys.stdout.write(f"{dim('╭─ thinking ─────────────────')}\n")
+                            sys.stdout.flush()
+                            in_think = True
+                        sys.stdout.write(dim(content))
+                        sys.stdout.flush()
+                    elif kind == "text":
+                        if in_think:
+                            sys.stdout.write(f"\n{dim('╰────────────────────────────')}\n\n")
+                            sys.stdout.flush()
+                            in_think = False
+                        if first_text and content:
+                            sys.stdout.write(f"{c(DBLUE, '●')} ")
+                            sys.stdout.flush()
+                            first_text = False
+                        sys.stdout.write(c("\033[38;5;75m", content.replace("\n", "\n  ")))
+                        sys.stdout.flush()
+                        buf.append(content)
+                    elif kind == "title":
+                        self.chat_title = content
+                        _update_chat_title(self.chat_id, content)
+                    if chunk.get("finish_reason") == "stop":
+                        mid = chunk.get("message_id")
+                        if mid: self.parent_id = mid
+            except Exception as e:
+                err[0] = e
+            finally:
+                done.set()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+        # show input bar with esc·cancel hint while AI is streaming
+        was_cancelled = _show_stream_bar(done)
+        if was_cancelled:
+            cancelled.set()
+        done.wait()
+
+        if err[0]:
+            sys.stdout.write(c(RED, f"\nStream error: {err[0]}"))
+        if was_cancelled:
+            sys.stdout.write(f"\n{c(DIM, '[cancelled]')}")
+        print("\n")
         result = "".join(buf)
         if result:
             _append_history(self.chat_id, "assistant", result)
@@ -1252,6 +1280,57 @@ def _hl(text: str, query: str, base: str = "") -> str:
     return (_b(text[:idx]) +
             c(HL, text[idx:idx+len(query)]) +
             _b(text[idx+len(query):]))
+
+def _show_stream_bar(done: threading.Event) -> bool:
+    """Draw input panel with esc·cancel hint while AI streams. Returns True if cancelled."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        done.wait()
+        return False
+    try:
+        import termios, tty as _tty_mod, select
+    except ImportError:
+        done.wait()
+        return False
+
+    fd       = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+
+    def _bar(): return c(DBLUE, "─" * _cols())
+    def _flush(s): sys.stdout.write(s); sys.stdout.flush()
+
+    # Draw: top bar / empty ❯ row / bottom bar / hint line
+    PR   = c(BBLUE+BOLD, "❯") + " "
+    hint = f"  {c(DIM, 'esc · cancel')}"
+    _flush(f"\033[?7l{_bar()}\r\n{PR}\r\n{_bar()}\r\n{hint}\033[3A\r{PR}")
+
+    cancelled = False
+    try:
+        _tty_mod.setraw(fd)
+        while not done.is_set():
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if not r:
+                continue
+            ch = os.read(fd, 1)
+            if ch == b'\x1b':
+                try:
+                    os.set_blocking(fd, False)
+                    seq = os.read(fd, 2)
+                    os.set_blocking(fd, True)
+                except:
+                    seq = b''
+                if not seq or seq not in (b'[A', b'[B', b'[C', b'[D'):
+                    cancelled = True
+                    break
+            elif ch == b'\x03':
+                cancelled = True
+                break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+        # erase the 4 lines: top bar + ❯ row + bottom bar + hint
+        _flush("\033[?7h\033[3A\r\033[K\033[1B\r\033[K\033[1B\r\033[K\033[1B\r\033[K\033[3A\r")
+
+    return cancelled
+
 
 def _prompt_with_autocomplete(_unused: str = "") -> str:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
