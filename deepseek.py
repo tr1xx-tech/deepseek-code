@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.18"
+VERSION   = "0.19"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1625,22 +1625,26 @@ def _pick_chat(agent) -> dict | None:
     def _w(): return sys.stdout.write
     def _flush(): sys.stdout.flush()
 
-    def _H(): return len(entries) + 2   # top sep + rows + bottom sep
+    def _H(): return len(entries) + 3   # top sep + hint + rows + bottom sep
 
     def _render(confirm_del=False):
         H = _H()
         W = _cols()
         out = []
-        hint = c(DIM, "  d·delete") if not confirm_del else ""
-        out.append(f"\r\033[K{c(DBLUE, '── chats ──')} {hint}")
+        # full-width top separator
+        label = " chats "
+        out.append(f"\r\033[K{c(DBLUE, '──' + label + '─' * max(0, W - len(label) - 3))}")
+        # hint line
+        if confirm_del:
+            hint = f" {c(RED, '✗')}  {c(DIM, 'delete? [y/n]')}"
+        else:
+            hint = f"   {c(DIM, 'd · delete selected')}"
+        out.append(f"\r\033[K{hint}")
         for i, e in enumerate(entries):
             is_cur = e["id"] == agent.chat_id
             title  = e["title"][:W - 8]
             if i == sel:
-                if confirm_del:
-                    row = f" {c(RED, '✗')} {c(RED, ('◆ ' if is_cur else '') + title)}  {c(DIM, 'delete? [y/n]')}"
-                else:
-                    row = f" {c('\033[38;5;75m', '❯')} {c('\033[38;5;75m', ('◆ ' if is_cur else '') + title)}"
+                row = f" {c('\033[38;5;75m', '❯')} {c(RED if confirm_del else '\033[38;5;75m', ('◆ ' if is_cur else '') + title)}"
             else:
                 row = f"   {c(DIM, ('◆ ' if is_cur else '') + title)}"
             row += " " * max(0, W - _vis_len(row) - 1)
@@ -1872,10 +1876,13 @@ def main():
                     _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
                 elif cmd == "chats":
+                    sys.stdout.write("\033[A\r\033[K"); sys.stdout.flush()
                     chosen = _pick_chat(agent)
                     if chosen:
                         agent._load_chat(chosen["id"], chosen["title"])
                         _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                    else:
+                        print(_sep("input")); print()
 
                 elif cmd == "delete":
                     _delete_current_chat(agent, cfg)
@@ -1891,7 +1898,7 @@ def main():
                         mn = next(n for k,n,_ in _MODELS if k==arg)
                         print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
                     else:
-                        # no arg or unrecognised arg — open picker
+                        sys.stdout.write("\033[A\r\033[K"); sys.stdout.flush()
                         chosen = _pick_model(cfg["model"])
                         if chosen:
                             cfg["model"] = chosen; save_cfg(cfg)
