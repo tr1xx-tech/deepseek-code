@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.45"
+VERSION   = "0.46"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -388,6 +388,15 @@ class DeepSeekClient:
             search_enabled    = search,
         )
         r = self._post("/chat/completion", payload, stream=True, pow_resp=pow_resp)
+        # DeepSeek SSE patch format:
+        #   {"p":"response/content","o":"APPEND","v":"text"}  — text chunk
+        #   {"v":"text"}                                       — continuation chunk
+        #   {"p":"response/thinking_content","o":"APPEND","v":"..."} — thinking chunk
+        #   {"p":"response/status","v":"FINISHED"}            — done
+        #   {"p":"response/message_id","v":"..."}             — message id
+        message_id  = None
+        cur_path    = "response/content"
+        _SENTINEL   = object()
         for raw in r.iter_lines():
             if not raw or not raw.startswith(b"data: "):
                 continue
@@ -395,14 +404,34 @@ class DeepSeekClient:
                 d = json.loads(raw[6:])
             except json.JSONDecodeError:
                 continue
-            choice = (d.get("choices") or [{}])[0]
-            delta  = choice.get("delta", {})
-            yield {
-                "type":          delta.get("type", "text"),
-                "content":       delta.get("content", ""),
-                "finish_reason": choice.get("finish_reason"),
-                "message_id":    d.get("id"),
-            }
+            p = d.get("p", _SENTINEL)
+            v = d.get("v")
+            # init block: {"v": {"response": {"message_id": N, ...}}}
+            if p is _SENTINEL and isinstance(v, dict) and "response" in v:
+                mid = v["response"].get("message_id")
+                if mid is not None:
+                    message_id = mid
+                continue
+            # status/control patches
+            if p is not _SENTINEL and p in ("response/status", "response/accumulated_token_usage"):
+                if p == "response/status" and v == "FINISHED":
+                    yield {"type": "text", "content": "", "finish_reason": "stop", "message_id": message_id}
+                continue
+            if not isinstance(v, str) or not v:
+                continue
+            # skip non-content patches
+            if p is not _SENTINEL and not str(p).startswith("response/content") and "thinking" not in str(p):
+                continue
+            # determine path
+            path = p if p is not _SENTINEL else cur_path
+            if "thinking" in str(path):
+                cur_path = path
+                yield {"type": "thinking", "content": v, "finish_reason": None, "message_id": None}
+            else:
+                if p is not _SENTINEL:
+                    cur_path = path
+                kind = "thinking" if "thinking" in cur_path else "text"
+                yield {"type": kind, "content": v, "finish_reason": None, "message_id": None}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
