@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.11"
+VERSION   = "0.12"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1367,16 +1367,13 @@ def _cmd_matches(text: str):
                if (cmd, desc) not in starts and q in desc.lower()]
     return starts + in_desc
 
-def _hl(text: str, query: str, base: str = "", word_boundary: bool = False) -> str:
-    """Highlight query inside text. base is the color for non-highlighted parts."""
+def _hl(text: str, query: str, base: str = "") -> str:
+    """Highlight first occurrence of query inside text. base is the color for the rest."""
     def _b(s): return c(base, s) if base and s else s
     if not query:
         return _b(text)
     lo, q = text.lower(), query.lower()
     idx = lo.find(q)
-    # for word-boundary mode only highlight if match starts at a word start
-    while idx != -1 and word_boundary and idx > 0 and lo[idx-1].isalnum():
-        idx = lo.find(q, idx + 1)
     if idx == -1:
         return _b(text)
     return (_b(text[:idx]) +
@@ -1422,11 +1419,11 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
                 is_sel  = (i == sel % len(hits))
                 if is_sel:
                     cmd_hl  = _hl(cmd,  "/" + q if q else "", base=BCYAN+BOLD)
-                    desc_hl = _hl(desc, q, base=BCYAN, word_boundary=True)
+                    desc_hl = _hl(desc, q, base=BCYAN)
                     row = f" {c(BCYAN+BOLD,'❯')} {cmd_hl}  {desc_hl}"
                 else:
                     cmd_hl  = _hl(cmd,  "/" + q if q else "", base=DIM)
-                    desc_hl = _hl(desc, q, base=DIM, word_boundary=True)
+                    desc_hl = _hl(desc, q, base=DIM)
                     row = f"   {cmd_hl}  {desc_hl}"
                 row += " " * max(0, W - _vis_len(row) - 1)
             else:
