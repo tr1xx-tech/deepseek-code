@@ -19,7 +19,7 @@ R, BOLD, DIM, ITALIC = "\033[0m", "\033[1m", "\033[38;5;245m", "\033[3m"
 CYAN, GREEN, YELLOW, RED, BLUE = "\033[38;5;44m", "\033[38;5;35m", "\033[38;5;220m", "\033[38;5;196m", "\033[38;5;33m"
 BCYAN = "\033[38;5;33m"   # accent blue (256-color, SSH-safe)
 BBLUE = "\033[38;5;33m"   # accent blue (256-color, SSH-safe)
-DBLUE = "\033[38;5;245m"  # gray — used for input separator line
+DBLUE = "\033[38;5;240m"  # gray — used for input separator line
 def c(col, t): return f"{col}{t}{R}"
 def bold(t):   return c(BOLD, t)
 def dim(t):    return c(DIM, t)
@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.1"
+VERSION   = "0.2"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
