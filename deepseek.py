@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.48"
+VERSION   = "0.49"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1370,11 +1370,21 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     ctrlc_once = [False]
     _ctrlc_timer = [None]
 
+    def _cur_col():
+        rows = prev_rows[0]
+        last = _wrap_rows("".join(buf), _cols())[-1]
+        return (2 + len(last)) if rows == 1 else (len(IND) + len(last))
+
     def _show_ctrlc_hint():
-        _flush(f"\033[1B\r\033[K  {c(DIM, 'press ctrl+c again to exit')}\033[1A\r\033[{2 + len(''.join(buf))}C")
+        rows = prev_rows[0]
+        # cursor is on ❯ row; bottom bar is `rows` lines below; hint goes one more below
+        down = rows + 1
+        _flush(f"\033[{down}B\r\033[K  {c(DIM, 'press ctrl+c again to exit')}\033[{down}A\r\033[{_cur_col()}C")
 
     def _clear_ctrlc_hint():
-        _flush(f"\033[1B\r\033[K{_bar()}\033[1A\r\033[{2 + len(''.join(buf))}C")
+        rows = prev_rows[0]
+        down = rows + 1
+        _flush(f"\033[{down}B\r\033[K\033[{down}A\r\033[{_cur_col()}C")
 
     def _arm_ctrlc_clear():
         if _ctrlc_timer[0]:
