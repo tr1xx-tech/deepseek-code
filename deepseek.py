@@ -1010,6 +1010,10 @@ def _pick_model(current: str) -> str | None:
                 except: seq = b''
                 if seq == b'[A':   sel = (sel - 1) % N
                 elif seq == b'[B': sel = (sel + 1) % N
+                else:
+                    _erase()
+                    _w()("\033[?25h"); _flush()
+                    return None
                 _render()
                 continue
             if ch in (b'\r', b'\n'):
@@ -1406,6 +1410,12 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                     if hits:
                         sel = min(len(hits)-1, sel+1); menu_open = True
                         _redraw_menu("".join(buf))
+                else:
+                    if menu_open:
+                        _clear_menu("".join(buf)); menu_open = False
+                    else:
+                        buf = []; sel = 0
+                        _redraw("".join(buf))
                 continue
 
             if ch in (b'\r', b'\n'):
@@ -1601,6 +1611,10 @@ def _pick_chat(agent) -> dict | None:
                 confirm_del = False
                 if seq == b'[A':   sel = max(0, sel - 1)
                 elif seq == b'[B': sel = min(len(entries) - 1, sel + 1)
+                else:
+                    _erase()
+                    _w()("\033[?25h"); _flush()
+                    return None
                 _render()
                 continue
 
@@ -1766,13 +1780,24 @@ def main():
         def _bar():
             return c(DBLUE, "─" * _cols())
 
+        _ctrlc = [0]
         while True:
             try:
                 line = _prompt_with_autocomplete().strip()
-            except (KeyboardInterrupt, EOFError):
+                _ctrlc[0] = 0
+            except EOFError:
                 print(f"\n{c(DIM, 'bye')}")
                 break
-            if not line: continue
+            except KeyboardInterrupt:
+                _ctrlc[0] += 1
+                if _ctrlc[0] >= 2:
+                    print(f"\n{c(DIM, 'bye')}")
+                    break
+                print(f"\n{c(DIM, 'press ctrl+c again to exit')}")
+                continue
+            if not line:
+                _ctrlc[0] = 0
+                continue
 
             if line.startswith("/"):
                 parts = line[1:].split(maxsplit=1)
