@@ -17,9 +17,9 @@ from typing import Generator
 # ─────────────────────────────────────────────────────────────────────────────
 R, BOLD, DIM, ITALIC = "\033[0m", "\033[1m", "\033[38;5;245m", "\033[3m"
 CYAN, GREEN, YELLOW, RED, BLUE = "\033[38;5;44m", "\033[38;5;35m", "\033[38;5;220m", "\033[38;5;196m", "\033[38;5;33m"
-BCYAN = "\033[38;5;27m"   # accent blue (256-color, SSH-safe)
-BBLUE = "\033[38;5;27m"   # accent blue (256-color, SSH-safe)
-DBLUE = "\033[38;5;18m"   # deep blue
+BCYAN = "\033[38;5;33m"   # accent blue (256-color, SSH-safe)
+BBLUE = "\033[38;5;33m"   # accent blue (256-color, SSH-safe)
+DBLUE = "\033[38;5;33m"   # accent blue (same as BCYAN)
 def c(col, t): return f"{col}{t}{R}"
 def bold(t):   return c(BOLD, t)
 def dim(t):    return c(DIM, t)
@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "1.0.17"
+VERSION   = "1.0.18"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1158,7 +1158,7 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
     av2 = c(BCYAN+BOLD, "▐█▟██▌")
     return [
         "",
-        f"  {av1}  {bold('Welcome back, ' + uname + '!')}",
+        f"  {av1}  {c(BCYAN+BOLD, 'Welcome back, ' + uname + '!')}",
         f"  {av2}  {c(DIM, 'Send /help for help · /exit to quit.')}",
         "",
         f"  {c(DIM, 'directory:')}  {c(DIM, cwd)}",
