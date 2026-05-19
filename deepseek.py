@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.34"
+VERSION   = "0.35"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1207,25 +1207,25 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     menu_open = False
 
     def _done(text: str):
-        BG = "\033[48;5;235m"
-        FG = "\033[97m"
-        INDENT = "  "  # replaces the hidden ❯ space
-        cols = _cols()
-        out = []
-        # go up to top bar row, clear it
+        BG     = "\033[48;5;235m"
+        FG     = "\033[97m"
+        INDENT = "  "
+        cols   = _cols()
+        out    = []
+        # clear top bar line
         out.append("\033[1A\r\033[K")
-        # move to ❯ row, clear, draw styled text (or blank)
-        out.append("\r\n\r\033[K")
+        # down to ❯ row, clear, draw styled text
+        out.append("\033[1B\r\033[K")
         if text:
             for i, ln in enumerate(text.split("\n")):
                 if i > 0:
-                    out.append("\r\n\r\033[K")
+                    out.append("\033[1B\r\033[K")
                 padded = INDENT + ln
-                pad = max(0, cols - len(padded))
+                pad    = max(0, cols - len(padded))
                 out.append(f"{BG}{FG}{padded}{' ' * pad}{R}")
-        # move to bottom bar row, clear it
-        out.append("\r\n\033[K")
-        # back up to text row then \r\n so cursor lands on next line
+        # clear bottom bar line
+        out.append("\033[1B\r\033[K")
+        # back up to text row, then move down — cursor below prompt
         out.append("\033[1A\r\n")
         _flush("".join(out))
         _flush("\033[?25h")
