@@ -1417,63 +1417,92 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     old_attr = termios.tcgetattr(fd)
     buf      = []
     sel      = 0
-    reserved = False   # menu block reserved below cursor
     SEL_COL  = "\033[38;5;75m"
     PR       = c(BBLUE+BOLD, "❯") + " "
 
-    def _flush(s: str):
-        sys.stdout.write(s); sys.stdout.flush()
+    def _bar(): return c(DBLUE, "─" * _cols())
+    def _flush(s): sys.stdout.write(s); sys.stdout.flush()
 
-    def _bar():
-        return c(DBLUE, "─" * _cols())
+    # Draw the 3-line field: top bar, ❯ row, bottom bar
+    # Then move cursor back up to sit on ❯ row
+    sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\r{PR}")
+    sys.stdout.flush()
 
-    def _draw_plain(text: str):
-        _flush(f"\r\033[K{PR}{text}")
+    # Row number of the ❯ line (1-indexed); bottom bar is row+1
+    import fcntl, struct, termios as _termios_mod
+    def _cursor_row():
+        # Query cursor position via ESC[6n
+        sys.stdout.write("\033[6n"); sys.stdout.flush()
+        resp = b""
+        import select
+        while True:
+            if select.select([fd], [], [], 0.1)[0]:
+                resp += os.read(fd, 16)
+                if b'R' in resp:
+                    break
+            else:
+                break
+        m = re.search(rb'\[(\d+);(\d+)R', resp)
+        return int(m.group(1)) if m else None
 
-    def _reserve_menu():
-        nonlocal reserved
-        if reserved:
-            return
-        _flush("\033[?25l")
-        _flush("\r\n" * MENU_H)
-        _flush(f"\033[{MENU_H}A\r")
-        reserved = True
+    prompt_row = _cursor_row()  # row of ❯ line
 
-    def _render_menu(text: str):
+    def _redraw(text: str):
+        """Overwrite only the ❯ line in-place."""
+        if prompt_row:
+            _flush(f"\033[{prompt_row};1H\033[K{PR}{text}")
+        else:
+            _flush(f"\r\033[K{PR}{text}")
+
+    def _redraw_menu(text: str):
         cols = _cols()
         q    = text[1:] if text.startswith("/") else ""
         hits = _cmd_matches(text)
         sel2 = max(0, min(sel, len(hits)-1)) if hits else 0
-        out  = [f"\r\033[K{PR}{text}"]
-        for i in range(MENU_H):
-            if i < len(hits):
-                cmd, desc = hits[i]
-                if i == sel2:
-                    row = f" {c(SEL_COL,'❯')} {_hl(cmd,'/' + q if q else '',SEL_COL)}  {_hl(desc,q,SEL_COL)}"
+        # menu rows go above the top bar (prompt_row-1)
+        if prompt_row:
+            out = []
+            for i in range(MENU_H):
+                r = prompt_row - 1 - MENU_H + i
+                if r < 1: continue
+                if i < len(hits):
+                    cmd, desc = hits[i]
+                    if i == sel2:
+                        row = f" {c(SEL_COL,'❯')} {_hl(cmd,'/' + q if q else '',SEL_COL)}  {_hl(desc,q,SEL_COL)}"
+                    else:
+                        row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
+                    row += " " * max(0, cols - _vis_len(row) - 1)
                 else:
-                    row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
-                row += " " * max(0, cols - _vis_len(row) - 1)
-            else:
-                row = ""
-            out.append(f"\r\033[K{row}")
-        _flush("\r\n".join(out))
-        _flush(f"\033[{MENU_H}A\r{PR}{text}")
+                    row = ""
+                out.append(f"\033[{r};1H\033[K{row}")
+            out.append(f"\033[{prompt_row};1H\033[K{PR}{text}")
+            _flush("".join(out))
+        else:
+            _redraw(text)
 
     def _clear_menu(text: str):
-        nonlocal reserved
-        out = [f"\r\033[K{PR}{text}"]
-        for _ in range(MENU_H):
-            out.append("\r\033[K")
-        _flush("\r\n".join(out))
-        _flush(f"\033[{MENU_H}A\r\033[K")
-        reserved = False
+        if prompt_row:
+            out = []
+            for i in range(MENU_H):
+                r = prompt_row - 1 - MENU_H + i
+                if r >= 1:
+                    out.append(f"\033[{r};1H\033[K")
+            out.append(f"\033[{prompt_row};1H\033[K{PR}{text}")
+            _flush("".join(out))
+
+    menu_open = False
 
     def _done(text: str):
-        if reserved:
-            _clear_menu(text)
-        _flush(f"\r\033[K{PR}{text}\r\n\033[K{c(DBLUE, '─' * _cols())}\r\n\033[?25h")
+        # Redraw ❯ line, clear bottom bar, position cursor after ❯ line
+        # so AI response prints right below the prompt
+        if prompt_row:
+            _flush(f"\033[{prompt_row};1H\033[K{PR}{text}"
+                   f"\033[{prompt_row+1};1H\033[K"
+                   f"\033[{prompt_row};1H\r\n")
+        else:
+            _flush(f"\r\033[K{PR}{text}\r\n")
+        _flush("\033[?25h")
 
-    sys.stdout.write(PR); sys.stdout.flush()
     try:
         _tty_mod.setraw(fd)
         while True:
@@ -1485,31 +1514,37 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                 if seq == b'[A':
                     hits = _cmd_matches("".join(buf))
                     if hits:
-                        sel = max(0, sel - 1)
-                        _render_menu("".join(buf))
+                        sel = max(0, sel - 1); menu_open = True
+                        _redraw_menu("".join(buf))
                 elif seq == b'[B':
                     hits = _cmd_matches("".join(buf))
                     if hits:
-                        sel = min(len(hits)-1, sel+1)
-                        _render_menu("".join(buf))
+                        sel = min(len(hits)-1, sel+1); menu_open = True
+                        _redraw_menu("".join(buf))
                 continue
 
             if ch in (b'\r', b'\n'):
                 text = "".join(buf)
                 hits = _cmd_matches(text)
-                if reserved and hits:
+                if menu_open and hits:
                     text = hits[min(sel, len(hits)-1)][0]
+                if menu_open:
+                    _clear_menu(text); menu_open = False
                 _done(text)
                 return text
 
-            if ch == b'\x03': _done(""); raise KeyboardInterrupt
-            if ch == b'\x04': _done(""); raise EOFError
+            if ch == b'\x03':
+                if menu_open: _clear_menu(""); menu_open = False
+                _done(""); raise KeyboardInterrupt
+            if ch == b'\x04':
+                if menu_open: _clear_menu(""); menu_open = False
+                _done(""); raise EOFError
 
             if ch == b'\t':
                 hits = _cmd_matches("".join(buf))
                 if hits:
                     buf = list(hits[sel % len(hits)][0]); sel = 0
-                    _reserve_menu(); _render_menu("".join(buf))
+                    menu_open = True; _redraw_menu("".join(buf))
                 continue
 
             if ch in (b'\x7f', b'\x08'):
@@ -1517,11 +1552,11 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                     buf.pop(); sel = 0
                     text = "".join(buf)
                     if text.startswith("/"):
-                        _reserve_menu(); _render_menu(text)
+                        menu_open = True; _redraw_menu(text)
                     else:
-                        if reserved:
-                            _clear_menu(text)
-                        _draw_plain(text)
+                        if menu_open:
+                            _clear_menu(text); menu_open = False
+                        _redraw(text)
                 continue
 
             b0 = ch[0]
@@ -1538,11 +1573,11 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             buf.append(char); sel = 0
             text = "".join(buf)
             if text.startswith("/"):
-                _reserve_menu(); _render_menu(text)
+                menu_open = True; _redraw_menu(text)
             else:
-                if reserved:
-                    _clear_menu(text)
-                _draw_plain(text)
+                if menu_open:
+                    _clear_menu(text); menu_open = False
+                _redraw(text)
 
     finally:
         sys.stdout.write("\033[?25h"); sys.stdout.flush()
@@ -1849,12 +1884,10 @@ def main():
 
         while True:
             try:
-                sys.stdout.write(_bar() + "\n"); sys.stdout.flush()
                 line = _prompt_with_autocomplete().strip()
             except (KeyboardInterrupt, EOFError):
                 print(f"\n{c(DIM, 'bye')}")
                 break
-            sys.stdout.write(_bar() + "\n"); sys.stdout.flush()
             if not line: continue
 
             if line.startswith("/"):
