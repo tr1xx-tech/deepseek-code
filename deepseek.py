@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.10"
+VERSION   = "0.11"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1367,15 +1367,21 @@ def _cmd_matches(text: str):
                if (cmd, desc) not in starts and q in desc.lower()]
     return starts + in_desc
 
-def _hl(text: str, query: str) -> str:
+def _hl(text: str, query: str, base: str = "", word_boundary: bool = False) -> str:
+    """Highlight query inside text. base is the color for non-highlighted parts."""
+    def _b(s): return c(base, s) if base and s else s
     if not query:
-        return text
-    idx = text.lower().find(query.lower())
+        return _b(text)
+    lo, q = text.lower(), query.lower()
+    idx = lo.find(q)
+    # for word-boundary mode only highlight if match starts at a word start
+    while idx != -1 and word_boundary and idx > 0 and lo[idx-1].isalnum():
+        idx = lo.find(q, idx + 1)
     if idx == -1:
-        return text
-    return (text[:idx] +
+        return _b(text)
+    return (_b(text[:idx]) +
             c(BCYAN+BOLD, text[idx:idx+len(query)]) +
-            text[idx+len(query):])
+            _b(text[idx+len(query):]))
 
 def _prompt_with_autocomplete(prompt_str: str) -> str:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -1413,13 +1419,15 @@ def _prompt_with_autocomplete(prompt_str: str) -> str:
         for i in range(MENU_H):
             if i < len(hits):
                 cmd, desc = hits[i]
-                cmd_hl  = _hl(cmd,  "/" + q if q else "")
-                desc_hl = _hl(desc, q)
                 is_sel  = (i == sel % len(hits))
                 if is_sel:
-                    row = f" {c(BCYAN+BOLD,'❯')} {c(BCYAN+BOLD, cmd_hl)}  {c(BCYAN, desc_hl)}"
+                    cmd_hl  = _hl(cmd,  "/" + q if q else "", base=BCYAN+BOLD)
+                    desc_hl = _hl(desc, q, base=BCYAN, word_boundary=True)
+                    row = f" {c(BCYAN+BOLD,'❯')} {cmd_hl}  {desc_hl}"
                 else:
-                    row = f"   {c(DIM, cmd_hl)}  {c(DIM, desc_hl)}"
+                    cmd_hl  = _hl(cmd,  "/" + q if q else "", base=DIM)
+                    desc_hl = _hl(desc, q, base=DIM, word_boundary=True)
+                    row = f"   {cmd_hl}  {desc_hl}"
                 row += " " * max(0, W - _vis_len(row) - 1)
             else:
                 row = ""
