@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.16"
+VERSION   = "0.17"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1337,9 +1337,8 @@ def _show_update_page(new_ver):
 _CMDS = [
     ("/model",         "choose model"),
     ("/new",          "start a new chat"),
-    ("/chats",        "list all chats"),
-    ("/chat",         "switch to chat by number"),
-    ("/delete",       "delete current or nth chat"),
+    ("/chats",        "browse and switch chats"),
+    ("/delete",       "delete current chat"),
     ("/cwd",          "change working directory"),
     ("/login",        "re-authenticate"),
     ("/search",       "toggle web search on/off"),
@@ -1557,9 +1556,8 @@ def _help_box():
         row("/model",        "choose model interactively"),
         sec("chat"),
         row("/new",          "start a new chat"),
-        row("/chats",        "list all chats"),
-        row("/chat <n>",     "switch to chat by number"),
-        row("/delete [n]",   "delete current or nth chat"),
+        row("/chats",        "browse and switch chats"),
+        row("/delete",       "delete current chat"),
         row("/cwd [path]",   "change working directory"),
         row("/login",        "re-authenticate"),
         sec("settings"),
@@ -1596,78 +1594,111 @@ def _status_box(cfg, chat_id="", chat_title=""):
     lines.append("")
     return _box(lines, title="DeepSeek Code  /status")
 
-def _show_chats(agent) -> list:
-    """Show chat list and return the entries for /chat <n> and /delete <n>."""
+def _pick_chat(agent) -> dict | None:
+    """Interactive arrow-key chat picker. Returns chosen entry dict or None."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return None
+    try:
+        import termios, tty as _tty_mod
+    except ImportError:
+        return None
+
+    # fetch list
     api_chats   = agent.client.list_chats()
     local_chats = _load_local_chats()
-
     if api_chats:
-        entries = []
-        for ch in api_chats[:30]:
-            cid   = ch.get("id", "")
-            title = (ch.get("title") or ch.get("name") or "Untitled")[:50]
-            model = ch.get("model", "")
-            entries.append({"id": cid, "title": title, "model": model})
+        entries = [{"id": ch.get("id",""),
+                    "title": (ch.get("title") or ch.get("name") or "Untitled")[:50],
+                    "model": ch.get("model","")} for ch in api_chats[:30]]
     else:
         entries = [{"id": ch.get("id",""), "title": ch.get("title","Untitled")[:50],
                     "model": ch.get("model","")} for ch in local_chats[:30]]
 
-    lines = [
-        "",
-        f"  {c(BBLUE+BOLD, 'Chats')}  {c(DIM, str(len(entries)) + ' total')}",
-        "",
-    ]
-    for i, e in enumerate(entries):
-        num   = c(DBLUE+BOLD, f"{i+1:2d}")
-        curr  = c(BCYAN+BOLD, " ◆") if e["id"] == agent.chat_id else "  "
-        title = e["title"]
-        tid   = c(DIM, "  " + e["id"][:8] + "…")
-        lines.append(f"  {num}{curr}  {title}{tid}")
     if not entries:
-        lines.append(f"  {c(DIM, 'No chats yet — start a conversation to create one.')}")
-    lines += [
-        "",
-        f"  {c(DIM, '/chat <n>  switch  ·  /new  new chat  ·  /delete [n]  delete')}",
-        "",
-    ]
-    _cls()
-    print()
-    print(_box(lines, title="DeepSeek Code  /chats"))
-    print()
-    print(_sep("input"))
-    print()
-    return entries
+        print(f"  {c(DIM, 'No chats yet.')}")
+        return None
 
-def _delete_chat_cmd(agent, cfg, arg, entries):
-    if arg:
-        try:
-            n = int(arg) - 1
-            target = entries[n]
-        except (ValueError, IndexError, TypeError):
-            print(c(RED, "  Usage: /delete [n]  (run /chats to see numbers)"))
-            return
-    else:
-        target = {"id": agent.chat_id, "title": agent.chat_title}
+    fd       = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+    N        = len(entries)
+    sel      = next((i for i, e in enumerate(entries) if e["id"] == agent.chat_id), 0)
+    H        = N + 2   # top sep + N rows + bottom sep
 
-    is_current = target["id"] == agent.chat_id
+    def _w(): return sys.stdout.write
+    def _flush(): sys.stdout.flush()
+
+    def _render():
+        W = _cols()
+        out = []
+        out.append(f"\r\033[K{c(DBLUE, '── chats ' + '─' * max(0, W - 10))}")
+        for i, e in enumerate(entries):
+            is_cur = e["id"] == agent.chat_id
+            title  = e["title"][:W - 8]
+            if i == sel:
+                marker = c("\033[38;5;75m", "❯")
+                row    = f" {marker} {c('\033[38;5;75m', ('◆ ' if is_cur else '') + title)}"
+            else:
+                row    = f"   {c(DIM, ('◆ ' if is_cur else '') + title)}"
+            row += " " * max(0, W - _vis_len(row) - 1)
+            out.append(f"\r\033[K{row}")
+        out.append(f"\r\033[K{c(DBLUE, '─' * max(0, W - 1))}")
+        _w()("\n".join(out))
+        _w()(f"\033[{H - 1}A\r")
+        _flush()
+
+    def _erase():
+        for i in range(H):
+            _w()(f"\r\033[K")
+            if i < H - 1: _w()("\n")
+        _w()(f"\033[{H - 1}A\r\033[K")
+        _flush()
+
+    _w()("\033[?25l")
+    _w()("\n" * H)
+    _w()(f"\033[{H}A\r")
+    _flush()
+    _render()
+
     try:
-        ans = input(f"  Delete {c(YELLOW, repr(target['title'][:40]))}? {c(DIM,'[y/N]')} ").strip().lower()
+        _tty_mod.setraw(fd)
+        while True:
+            ch = os.read(fd, 1)
+            if ch == b'\x1b':
+                try:    seq = os.read(fd, 2)
+                except: seq = b''
+                if seq == b'[A':   sel = max(0, sel - 1)
+                elif seq == b'[B': sel = min(N - 1, sel + 1)
+                _render()
+                continue
+            if ch in (b'\r', b'\n'):
+                _erase()
+                _w()("\033[?25h"); _flush()
+                return entries[sel]
+            if ch in (b'\x03', b'\x04', b'q'):
+                _erase()
+                _w()("\033[?25h"); _flush()
+                if ch == b'\x03': raise KeyboardInterrupt
+                return None
+    finally:
+        _w()("\033[?25h"); _flush()
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+
+def _delete_current_chat(agent, cfg):
+    title = agent.chat_title or "Untitled"
+    try:
+        ans = input(f"  Delete {c(YELLOW, repr(title[:40]))}? {c(DIM,'[y/N]')} ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         return
     if ans != "y":
         return
-
-    ok = agent.client.delete_chat(target["id"])
-    _remove_local_chat(target["id"])
-
+    ok = agent.client.delete_chat(agent.chat_id)
+    _remove_local_chat(agent.chat_id)
     if ok:
         print(f"  {c(GREEN,'✓')}  deleted")
     else:
         print(f"  {c(YELLOW,'⚠')}  removed locally (API delete may have failed)")
-
-    if is_current:
-        agent._new_session()
-        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+    agent._new_session()
+    _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
 def main():
     cfg  = load_cfg()
@@ -1762,7 +1793,6 @@ def main():
             cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
             save_cfg(cfg); return "on" if cfg[key] else "off"
 
-        _last_chats: list = []
 
         while True:
             try:
@@ -1798,27 +1828,13 @@ def main():
                     _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
                 elif cmd == "chats":
-                    _last_chats = _show_chats(agent)
-
-                elif cmd == "chat":
-                    if not arg:
-                        print(c(YELLOW, "  Usage: /chat <n>  (run /chats first)"))
-                    else:
-                        try:
-                            n = int(arg) - 1
-                            if _last_chats and 0 <= n < len(_last_chats):
-                                e = _last_chats[n]
-                                agent._load_chat(e["id"], e["title"])
-                                _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
-                            else:
-                                print(c(YELLOW, "  Run /chats first to see chat numbers"))
-                        except ValueError:
-                            # treat as raw ID
-                            agent._load_chat(arg)
-                            _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                    chosen = _pick_chat(agent)
+                    if chosen:
+                        agent._load_chat(chosen["id"], chosen["title"])
+                        _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
 
                 elif cmd == "delete":
-                    _delete_chat_cmd(agent, cfg, arg, _last_chats)
+                    _delete_current_chat(agent, cfg)
 
                 elif cmd == "login":
                     do_login(cfg)
