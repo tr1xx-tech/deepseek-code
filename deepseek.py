@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.26"
+VERSION   = "0.27"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1423,9 +1423,9 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _bar(): return c(DBLUE, "─" * _cols())
     def _flush(s): sys.stdout.write(s); sys.stdout.flush()
 
-    # Draw 2-line field: ❯ row + bottom bar; cursor sits on ❯ row after PR
-    # Using \r\n in normal (cooked) mode — safe before setraw
-    sys.stdout.write(f"{PR}\r\n{_bar()}\033[1A\r{PR}")
+    # Draw 3-line field: top bar / ❯ row / bottom bar
+    # Cursor ends up on ❯ row (2 lines up from bottom bar)
+    sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\033[1A\r{PR}")
     sys.stdout.flush()
 
     # All positioning is relative — no ESC[6n needed.
@@ -1440,8 +1440,8 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         q    = text[1:] if text.startswith("/") else ""
         hits = _cmd_matches(text)
         sel2 = max(0, min(sel, len(hits)-1)) if hits else 0
-        # Build output: go up MENU_H lines, draw each menu row, come back
-        out = [f"\033[{MENU_H}A"]   # cursor up MENU_H rows
+        # Go up past top bar + MENU_H rows, draw menu, redraw top bar, ❯
+        out = [f"\033[{MENU_H + 1}A"]   # up: MENU_H menu rows + top bar
         for i in range(MENU_H):
             if i < len(hits):
                 cmd, desc = hits[i]
@@ -1452,16 +1452,16 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                 row += " " * max(0, cols - _vis_len(row) - 1)
             else:
                 row = ""
-            out.append(f"\r\033[K{row}\r\n")  # clear + print + next line
-        # now cursor is on ❯ row
-        out.append(f"\r\033[K{PR}{text}")
+            out.append(f"\r\033[K{row}\r\n")
+        # redraw top bar then ❯
+        out.append(f"\r\033[K{_bar()}\r\n\r\033[K{PR}{text}")
         _flush("".join(out))
 
     def _clear_menu(text: str):
-        out = [f"\033[{MENU_H}A"]
+        out = [f"\033[{MENU_H + 1}A"]
         for _ in range(MENU_H):
             out.append("\r\033[K\r\n")
-        out.append(f"\r\033[K{PR}{text}")
+        out.append(f"\r\033[K{_bar()}\r\n\r\033[K{PR}{text}")
         _flush("".join(out))
 
     menu_open = False
