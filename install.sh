@@ -157,17 +157,16 @@ fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null
-printf "\r\033[K  ${GREEN}✓${R}  ${BOLD}complete${R}\n"
+printf "\r\033[K\n"
+printf "  ${GREEN}✓${R}  ${BOLD}DeepSeek Code installed${R}\n\n"
 
-# Check if BIN_DIR is in current PATH
 case ":$PATH:" in
     *":$BIN_DIR:"*)
-        sleep 0.4
-        clear
-        exec "$BIN_DIR/deepseek" "$@" </dev/tty
+        printf "  Run ${BOLD}${CYAN}dsk${R} to start.\n\n"
         ;;
     *)
-        printf "\n  ${DIM}Run this to activate, then use ${R}${BOLD}dsk${R}${DIM}:${R}\n"
-        printf "  ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
+        printf "  Add to PATH first:\n\n"
+        printf "    ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
+        printf "  Then run ${BOLD}${CYAN}dsk${R} to start.\n\n"
         ;;
 esac
