@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.36"
+VERSION   = "0.37"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1181,9 +1181,12 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         q    = text[1:] if text.startswith("/") else ""
         hits = _cmd_matches(text)
         sel2 = max(0, min(sel, len(hits)-1)) if hits else 0
-        # Go up MENU_H rows + top bar, draw menu, redraw top bar + ❯
-        out = [f"\033[{MENU_H + 1}A"]
+        # cursor on ❯ row; go down past bottom bar, draw MENU_H rows, come back
+        out = [f"\r\033[K{PR}{text}"]   # redraw ❯ row first
+        out.append("\033[1B\r\033[K")    # move to bottom bar row, clear
+        out.append(_bar())               # redraw bottom bar
         for i in range(MENU_H):
+            out.append("\033[1B\r\033[K")  # next menu row
             if i < len(hits):
                 cmd, desc = hits[i]
                 if i == sel2:
@@ -1191,17 +1194,19 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                 else:
                     row = f"   {_hl(cmd,'/' + q if q else '',DIM)}  {_hl(desc,q,DIM)}"
                 row += " " * max(0, cols - _vis_len(row) - 1)
-            else:
-                row = ""
-            out.append(f"\r\033[K{row}\r\n")
-        out.append(f"\r\033[K{_bar()}\r\n\r\033[K{PR}{text}")
+                out.append(row)
+        # return cursor to ❯ row (1 bottom bar + MENU_H rows below)
+        out.append(f"\033[{MENU_H + 1}A\r")
         _flush("".join(out))
 
     def _clear_menu(text: str):
-        out = [f"\033[{MENU_H + 1}A"]
+        # go down past bottom bar, clear MENU_H rows, come back
+        out = [f"\r\033[K{PR}{text}"]
+        out.append("\033[1B\r\033[K")
+        out.append(_bar())
         for _ in range(MENU_H):
-            out.append("\r\033[K\r\n")
-        out.append(f"\r\033[K{_bar()}\r\n\r\033[K{PR}{text}")
+            out.append("\033[1B\r\033[K")
+        out.append(f"\033[{MENU_H + 1}A\r")
         _flush("".join(out))
 
     menu_open = False
