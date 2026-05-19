@@ -45,12 +45,13 @@ CONFIG_FILE = DATA_DIR / "config.json"
 COOKIE_FILE = DATA_DIR / "cookies.json"
 WASM_FILE   = DATA_DIR / "sha3.wasm"
 CHATS_FILE  = DATA_DIR / "chats.json"
+HIST_DIR    = DATA_DIR / "history"
 
 WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.46"
+VERSION   = "0.47"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -126,6 +127,33 @@ def _track_chat(chat_id: str, title: str, model: str):
 def _remove_local_chat(chat_id: str):
     chats = _load_local_chats()
     _save_local_chats([ch for ch in chats if ch.get("id") != chat_id])
+    hist = HIST_DIR / f"{chat_id}.json"
+    try: hist.unlink(missing_ok=True)
+    except: pass
+
+def _load_history(chat_id: str) -> list:
+    try:
+        f = HIST_DIR / f"{chat_id}.json"
+        return json.loads(f.read_text()) if f.exists() else []
+    except: return []
+
+def _append_history(chat_id: str, role: str, text: str):
+    try:
+        HIST_DIR.mkdir(parents=True, exist_ok=True)
+        f    = HIST_DIR / f"{chat_id}.json"
+        msgs = _load_history(chat_id)
+        msgs.append({"role": role, "text": text, "ts": int(time.time())})
+        f.write_text(json.dumps(msgs, ensure_ascii=False))
+    except: pass
+
+def _update_chat_title(chat_id: str, title: str):
+    if not title: return
+    chats = _load_local_chats()
+    for ch in chats:
+        if ch.get("id") == chat_id:
+            ch["title"] = title[:60]
+            break
+    _save_local_chats(chats)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE.JS POW SOLVER (fallback when wasmtime is unavailable — e.g. Termux)
@@ -393,16 +421,29 @@ class DeepSeekClient:
         #   {"v":"text"}                                       — continuation chunk
         #   {"p":"response/thinking_content","o":"APPEND","v":"..."} — thinking chunk
         #   {"p":"response/status","v":"FINISHED"}            — done
-        #   {"p":"response/message_id","v":"..."}             — message id
+        # SSE events: "event: title / data: {"content":"..."}" — chat title
         message_id  = None
         cur_path    = "response/content"
+        cur_event   = None
         _SENTINEL   = object()
         for raw in r.iter_lines():
-            if not raw or not raw.startswith(b"data: "):
+            if not raw:
+                cur_event = None
+                continue
+            if raw.startswith(b"event: "):
+                cur_event = raw[7:].decode().strip()
+                continue
+            if not raw.startswith(b"data: "):
                 continue
             try:
                 d = json.loads(raw[6:])
             except json.JSONDecodeError:
+                continue
+            if cur_event == "title":
+                title = d.get("content", "")
+                if title:
+                    yield {"type": "title", "content": title, "finish_reason": None, "message_id": None}
+                cur_event = None
                 continue
             p = d.get("p", _SENTINEL)
             v = d.get("v")
@@ -771,6 +812,31 @@ class Agent:
         self.parent_id   = None
         self._first_turn = False
 
+    def print_history(self):
+        msgs = _load_history(self.chat_id)
+        if not msgs:
+            return
+        W = _cols()
+        BG_U = "\033[48;5;238m"
+        FG_U = "\033[97m"
+        AI_COL = "\033[38;5;75m"
+        IND = "  "
+        for msg in msgs:
+            role = msg.get("role", "")
+            text = msg.get("text", "").rstrip()
+            if not text:
+                continue
+            print()
+            if role == "user":
+                lines = text.splitlines() or [""]
+                for line in lines:
+                    ln  = IND + line
+                    pad = max(0, W - len(ln))
+                    print(f"{BG_U}{FG_U}{ln}{' ' * pad}{R}")
+            else:
+                print(f"{AI_COL}{text}{R}")
+        print()
+
     def _stream(self, prompt: str) -> str:
         r1       = self.cfg["model"] == "r1"
         thinking = self.cfg["thinking"] and r1
@@ -796,13 +862,19 @@ class Agent:
                         in_think = False
                     print(c("\033[38;5;75m", content), end="", flush=True)
                     buf.append(content)
+                elif kind == "title":
+                    self.chat_title = content
+                    _update_chat_title(self.chat_id, content)
                 if chunk.get("finish_reason") == "stop":
                     mid = chunk.get("message_id")
                     if mid: self.parent_id = mid
         except Exception as e:
             print(c(RED, f"\nStream error: {e}"))
         print()
-        return "".join(buf)
+        result = "".join(buf)
+        if result:
+            _append_history(self.chat_id, "assistant", result)
+        return result
 
     def _run_tool(self, name: str, inp: dict) -> str:
         fn = TOOLS.get(name)
@@ -844,6 +916,7 @@ class Agent:
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     def turn(self, user_msg: str):
+        _append_history(self.chat_id, "user", user_msg)
         if self._first_turn:
             self.chat_title  = user_msg[:50].replace('\n', ' ')
             _track_chat(self.chat_id, self.chat_title, self.cfg["model"])
@@ -1454,16 +1527,10 @@ def _pick_chat(agent) -> dict | None:
     except ImportError:
         return None
 
-    # fetch list
-    api_chats   = agent.client.list_chats()
+    # fetch list from local storage
     local_chats = _load_local_chats()
-    if api_chats:
-        entries = [{"id": ch.get("id",""),
-                    "title": (ch.get("title") or ch.get("name") or "Untitled")[:50],
-                    "model": ch.get("model","")} for ch in api_chats[:30]]
-    else:
-        entries = [{"id": ch.get("id",""), "title": ch.get("title","Untitled")[:50],
-                    "model": ch.get("model","")} for ch in local_chats[:30]]
+    entries = [{"id": ch.get("id",""), "title": ch.get("title","Untitled")[:50],
+                "model": ch.get("model","")} for ch in local_chats[:30]]
 
     if not entries:
         print(f"  {c(DIM, 'No chats yet.')}")
@@ -1732,9 +1799,11 @@ def main():
                     chosen = _pick_chat(agent)
                     if chosen:
                         agent._load_chat(chosen["id"], chosen["title"])
+                        _cls()
                         _show_welcome(cfg, agent.chat_id, agent.chat_title, getattr(agent, "user_name", ""))
+                        agent.print_history()
                     else:
-                        print();
+                        print()
                     continue
 
                 elif cmd == "delete":
