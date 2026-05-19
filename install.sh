@@ -30,7 +30,7 @@ fi
 
 APP="$SHARE_DIR/deepseek.py"
 
-printf "\n  ${BOLD}${CYAN}◆${R}  ${BOLD}DeepSeek Code${R}\n\n"
+printf "\n  ${CYAN}◆${R}  ${CYAN}DeepSeek Code${R}\n\n"
 
 # ── spinner ───────────────────────────────────────────────────────────────────
 ( while true; do
@@ -159,8 +159,7 @@ fi
 HL="\033[38;5;75m"
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null
 printf "\r\033[K\n"
-printf "  ${CYAN}${BOLD}DeepSeek Code${R}\n"
-printf "  ${CYAN}installed${R}\n\n"
+printf "  ${GREEN}✓${R}  ${CYAN}installed${R}\n\n"
 
 case ":$PATH:" in
     *":$BIN_DIR:"*)
