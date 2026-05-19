@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.40"
+VERSION   = "0.41"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1165,20 +1165,49 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _flush(s): sys.stdout.write(s); sys.stdout.flush()
 
     # Draw 3-line field: top bar / ❯ row / bottom bar
+    # Disable terminal auto-wrap so we control line breaks manually
     # Cursor ends on ❯ row (one \033[1A from bottom bar)
-    sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\r{PR}")
+    sys.stdout.write(f"\033[?7l{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\r{PR}")
     sys.stdout.flush()
 
     # All positioning is relative — no ESC[6n needed.
     # Cursor is always on the ❯ row after every operation.
 
+    prev_rows = [1]  # rows occupied by prompt last draw
+
+    def _lc(text: str) -> int:
+        cols = _cols()
+        return max(1, (2 + len(text) + cols - 1) // cols)
+
     def _redraw(text: str):
-        # clamp text to one line so it never auto-wraps
-        cols    = _cols()
-        visible = 2 + len(text)           # ❯ + space + text
-        if visible >= cols:
-            text = text[:max(0, cols - 3)] + "…"
-        _flush(f"\r\033[K{PR}{text}")
+        cols   = _cols()
+        new_lc = _lc(text)
+        old_lc = prev_rows[0]
+        out    = []
+        # go up to first row of prompt
+        if old_lc > 1:
+            out.append(f"\033[{old_lc - 1}A")
+        # clear old rows
+        out.append("\r\033[K")
+        for _ in range(old_lc - 1):
+            out.append("\033[1B\r\033[K")
+        if old_lc > 1:
+            out.append(f"\033[{old_lc - 1}A")
+        # print PR + text with manual line breaks
+        full  = "  " + text   # "❯ " is 2 chars, replaced by indent for continuation
+        chunk = cols - 2      # first line: cols minus "❯ "
+        out.append(f"\r{PR}{text[:chunk]}")
+        pos = chunk
+        while pos < len(text):
+            out.append(f"\r\n{text[pos:pos + cols]}\033[K")
+            pos += cols
+        # clear any extra rows from previous longer text
+        for _ in range(old_lc - new_lc):
+            out.append(f"\033[1B\r\033[K")
+        if old_lc - new_lc > 0:
+            out.append(f"\033[{old_lc - new_lc}A")
+        prev_rows[0] = new_lc
+        _flush("".join(out))
 
     def _pr_len(): return 2 + len("".join(buf))  # ❯ + space + text
 
@@ -1216,28 +1245,34 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     menu_open = False
 
     def _done(text: str):
-        BG     = "\033[48;5;238m"
-        FG     = "\033[97m"
-        INDENT = "  "
-        cols   = _cols()
-        out    = []
-        # clear top bar line
-        out.append("\033[1A\r\033[K")
-        # down to ❯ row, clear, draw styled text
+        BG   = "\033[48;5;238m"
+        FG   = "\033[97m"
+        cols = _cols()
+        rows = prev_rows[0]
+        out  = []
+        # go up past top bar + all prompt rows to top bar
+        out.append(f"\033[{rows}A\r\033[K")  # clear top bar
+        # draw styled text rows
         out.append("\033[1B\r\033[K")
         if text:
-            for i, ln in enumerate(text.split("\n")):
+            # rebuild wrapped lines the same way _redraw did
+            chunk   = cols - 2
+            lines   = ["  " + text[:chunk]]
+            pos     = chunk
+            while pos < len(text):
+                lines.append(text[pos:pos + cols])
+                pos += cols
+            for i, ln in enumerate(lines):
                 if i > 0:
                     out.append("\033[1B\r\033[K")
-                padded = INDENT + ln
-                pad    = max(0, cols - len(padded))
-                out.append(f"{BG}{FG}{padded}{' ' * pad}{R}")
-        # clear bottom bar line
+                pad = max(0, cols - len(ln))
+                out.append(f"{BG}{FG}{ln}{' ' * pad}{R}")
+        # clear bottom bar
         out.append("\033[1B\r\033[K")
-        # back up to text row, then move down — cursor below prompt
+        # back up to last text row, then \r\n → cursor on next line
         out.append("\033[1A\r\n")
         _flush("".join(out))
-        _flush("\033[?25h")
+        _flush("\033[?7h\033[?25h")
 
     try:
         _tty_mod.setraw(fd)
@@ -1316,7 +1351,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                 _redraw(text)
 
     finally:
-        sys.stdout.write("\033[?25h"); sys.stdout.flush()
+        sys.stdout.write("\033[?7h\033[?25h"); sys.stdout.flush()  # restore autowrap
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
 
