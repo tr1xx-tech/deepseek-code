@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.44"
+VERSION   = "0.45"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1174,7 +1174,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     # Cursor is always on the ❯ row after every operation.
 
     prev_rows = [1]  # rows occupied by prompt last draw
-    PAD_R = 1        # right padding on every row
+    PAD_R = 2        # right padding on every row
     IND   = "  "     # left indent for continuation rows (replaces ❯ )
 
     def _wrap_rows(text: str, cols: int) -> list:
