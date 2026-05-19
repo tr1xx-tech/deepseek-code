@@ -1427,9 +1427,8 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _bar():
         return c(DBLUE, "─" * _cols())
 
-    # Draw: ❯ line + bottom bar on next line, cursor stays on ❯ line
     def _draw_plain(text: str):
-        _flush(f"\r\033[K{PR}{text}\r\n\033[K{_bar()}\033[1A\r{PR}{text}")
+        _flush(f"\r\033[K{PR}{text}")
 
     def _reserve_menu():
         nonlocal reserved
@@ -1855,7 +1854,6 @@ def main():
             except (KeyboardInterrupt, EOFError):
                 print(f"\n{c(DIM, 'bye')}")
                 break
-            sys.stdout.write(bar() + "\n"); sys.stdout.flush()
             if not line: continue
 
             if line.startswith("/"):
