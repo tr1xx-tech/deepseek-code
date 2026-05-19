@@ -50,7 +50,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.38"
+VERSION   = "0.39"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1172,9 +1172,24 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     # All positioning is relative — no ESC[6n needed.
     # Cursor is always on the ❯ row after every operation.
 
+    def _line_count(text: str) -> int:
+        # how many terminal rows does PR+text occupy
+        cols = _cols()
+        return max(1, (2 + len(text) + cols - 1) // cols)
+
     def _redraw(text: str):
-        # Cursor on ❯ row → clear line, reprint
-        _flush(f"\r\033[K{PR}{text}")
+        lc = _line_count(text)
+        # if text wraps, go up to first row of the prompt first
+        out = []
+        if lc > 1:
+            out.append(f"\033[{lc - 1}A")
+        out.append(f"\r\033[K{PR}{text}")
+        # clear any leftover wrapped lines below
+        for _ in range(lc - 1):
+            out.append("\033[1B\r\033[K")
+        if lc > 1:
+            out.append(f"\033[{lc - 1}A\r\033[{_pr_len()}C")
+        _flush("".join(out))
 
     def _pr_len(): return 2 + len("".join(buf))  # ❯ + space + text
 
