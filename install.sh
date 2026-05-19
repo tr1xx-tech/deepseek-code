@@ -156,17 +156,19 @@ if [ "$IS_TERMUX" = "0" ]; then
 fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
+HL="\033[38;5;75m"
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null
 printf "\r\033[K\n"
-printf "  ${GREEN}✓${R}  ${BOLD}DeepSeek Code installed${R}\n\n"
+printf "  ${CYAN}${BOLD}DeepSeek Code${R}\n"
+printf "  ${CYAN}installed${R}\n\n"
 
 case ":$PATH:" in
     *":$BIN_DIR:"*)
-        printf "  Run ${BOLD}${CYAN}dsk${R} to start.\n\n"
+        printf "  Run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
         ;;
     *)
         printf "  Add to PATH first:\n\n"
-        printf "    ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
-        printf "  Then run ${BOLD}${CYAN}dsk${R} to start.\n\n"
+        printf "    ${HL}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n\n"
+        printf "  Then run ${BOLD}${CYAN}dsk${R} or ${BOLD}${CYAN}deepseek${R} to start.\n\n"
         ;;
 esac
