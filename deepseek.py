@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.64"
+VERSION   = "0.65"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1220,12 +1220,9 @@ def _update_header(title=None, model=None, cwd=None):
 
 def _enter_app():
     if not _tty(): return
-    rows = _rows()
     sys.stdout.write(
         "\033[?1049h"       # alternate screen
         "\033[H"            # cursor home
-        f"\033[2;{rows}r"   # scroll region: row 2..rows (row 1 = header)
-        "\033[2;1H"         # cursor to row 2
     )
     sys.stdout.flush()
 
@@ -1320,7 +1317,7 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
 
 def _show_welcome(cfg, chat_id, chat_title_or_fn, user_name=""):
     title = chat_title_or_fn() if callable(chat_title_or_fn) else chat_title_or_fn
-    print("\n" +
+    print("\n\n" +
           _box(_welcome_lines(cfg, chat_id, title, user_name),
                title=f"DeepSeek Code  v{VERSION}") +
           "\n", end="", flush=True)
@@ -1445,7 +1442,7 @@ def _hl(text: str, query: str, base: str = "") -> str:
             _b(text[idx+len(query):]))
 
 def _show_stream_bar(done: threading.Event) -> bool:
-    """Draw input panel with esc·cancel hint while AI streams. Returns True if cancelled."""
+    """Draw fixed panel at bottom while AI streams. Returns True if cancelled."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         done.wait()
         return False
@@ -1457,13 +1454,27 @@ def _show_stream_bar(done: threading.Event) -> bool:
 
     fd       = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
+    rows     = _rows()
+    cols     = _cols()
 
-    def _bar(): return c(DBLUE, "─" * _cols())
-    def _flush(s): sys.stdout.write(s); sys.stdout.flush()
-
+    bar  = c(DBLUE, "─" * cols)
     PR   = c(BBLUE+BOLD, "❯") + " "
     hint = f"  {c(DIM, 'esc · cancel')}"
-    _flush(f"\033[?7l{_bar()}\r\n{PR}\r\n{_bar()}\r\n{hint}\033[3A\r{PR}")
+
+    def _flush(s): sys.stdout.write(s); sys.stdout.flush()
+
+    # Draw panel at absolute bottom rows, restrict scroll region so AI
+    # text cannot overwrite the panel.
+    # rows-3: top bar  rows-2: ❯  rows-1: bottom bar  rows: hint
+    _flush(
+        "\0337"                              # save cursor (AI text position)
+        f"\033[2;{rows-4}r"                 # scroll region: row 2..rows-4
+        f"\033[{rows-3};1H\033[K{bar}"
+        f"\033[{rows-2};1H\033[K{PR}"
+        f"\033[{rows-1};1H\033[K{bar}"
+        f"\033[{rows};1H\033[K{hint}"
+        "\0338"                              # restore cursor (back to AI text)
+    )
 
     cancelled = False
     try:
@@ -1488,7 +1499,14 @@ def _show_stream_bar(done: threading.Event) -> bool:
                 break
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
-        _flush("\033[?7h\033[3A\r\033[K\033[1B\r\033[K\033[1B\r\033[K\033[1B\r\033[K\033[3A\r")
+        # restore scroll region and clear panel lines
+        _flush(
+            "\033[r"                         # reset scroll region (full screen scrollable)
+            f"\033[{rows-3};1H\033[K"
+            f"\033[{rows-2};1H\033[K"
+            f"\033[{rows-1};1H\033[K"
+            f"\033[{rows};1H\033[K"
+        )
 
     return cancelled
 
@@ -1504,6 +1522,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     fd       = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
     buf      = []
+    cur      = 0    # cursor position within buf
     sel      = 0
     SEL_COL  = "\033[38;5;75m"
     PR       = c(BBLUE+BOLD, "❯") + " "
@@ -1541,40 +1560,45 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
     def _lc(text: str) -> int:
         return len(_wrap_rows(text, _cols()))
 
+    def _cur_col(text: str, cur_pos: int, cols: int) -> tuple:
+        """Return (row_offset_from_top, col) for cursor at cur_pos in text."""
+        usable1 = cols - 2 - PAD_R
+        usableN = cols - len(IND) - PAD_R
+        if cur_pos <= usable1:
+            return 0, 2 + cur_pos        # row 0 (first), col after ❯+space
+        remaining = cur_pos - usable1
+        row = 1 + remaining // usableN
+        col = len(IND) + (remaining % usableN)
+        return row, col
+
     def _redraw(text: str):
         cols   = _cols()
         wrows  = _wrap_rows(text, cols)
         new_lc = len(wrows)
         old_lc = prev_rows[0]
-        # total rows to clear: old text rows + old bottom bar
         total_old = old_lc + 1
         out = []
-        # go up to first text row
         if old_lc > 1:
             out.append(f"\033[{old_lc - 1}A")
-        # clear all old rows including old bottom bar
         out.append("\r\033[K")
         for _ in range(total_old - 1):
             out.append("\033[1B\r\033[K")
-        # back to first text row
         out.append(f"\033[{total_old - 1}A")
-        # print text rows
         out.append(f"\r{PR}{wrows[0]}")
         for row in wrows[1:]:
             out.append(f"\r\n{IND}{row}")
-        # draw bottom bar right below last text row
         out.append(f"\033[1B\r\033[K{_bar()}")
-        # return cursor to last text row, position after typed text
-        last_row = wrows[-1]
-        if new_lc == 1:
-            col = 2 + len(last_row)   # ❯ + space + text
-        else:
-            col = len(IND) + len(last_row)
-        out.append(f"\033[1A\r\033[{col}C")
+        # position cursor at cur, not end of text
+        cur_row, cur_col = _cur_col(text, cur, cols)
+        text_rows = new_lc
+        # go back up: from bottom bar row to first text row = text_rows lines
+        # then down cur_row lines
+        up = text_rows - cur_row
+        out.append(f"\033[{up}A\r\033[{cur_col}C")
         prev_rows[0] = new_lc
         _flush("".join(out))
 
-    def _pr_len(): return 2 + len("".join(buf))  # ❯ + space + text
+    def _pr_len(): return 2 + cur  # ❯ + space + chars up to cursor
 
     def _redraw_menu(text: str):
         cols = _cols()
@@ -1652,6 +1676,18 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         _flush("".join(out))
         _flush("\033[?7h\033[?25h")
 
+    def _on_resize(sig, frame):
+        # Redraw the whole input field at new terminal size
+        nonlocal prev_rows
+        prev_rows = [1]
+        text = "".join(buf)
+        sys.stdout.write(f"\033[?7l{_bar()}\r\n{PR}{text}\r\n{_bar()}\033[1A\r")
+        sys.stdout.flush()
+        _redraw(text)
+        _draw_header()
+
+    old_sigwinch = signal.signal(signal.SIGWINCH, _on_resize) if hasattr(signal, 'SIGWINCH') else None
+
     try:
         _tty_mod.setraw(fd)
         while True:
@@ -1675,11 +1711,19 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                     if hits:
                         sel = min(len(hits)-1, sel+1); menu_open = True
                         _redraw_menu("".join(buf))
+                elif seq == b'[D':  # left arrow
+                    if cur > 0:
+                        cur -= 1
+                        _redraw("".join(buf))
+                elif seq == b'[C':  # right arrow
+                    if cur < len(buf):
+                        cur += 1
+                        _redraw("".join(buf))
                 else:
                     if menu_open:
                         _clear_menu("".join(buf)); menu_open = False
                     else:
-                        buf = []; sel = 0
+                        buf = []; cur = 0; sel = 0
                         _redraw("".join(buf))
                 continue
 
@@ -1709,13 +1753,13 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             if ch == b'\t':
                 hits = _cmd_matches("".join(buf))
                 if hits:
-                    buf = list(hits[sel % len(hits)][0]); sel = 0
+                    buf = list(hits[sel % len(hits)][0]); cur = len(buf); sel = 0
                     menu_open = True; _redraw_menu("".join(buf))
                 continue
 
             if ch in (b'\x7f', b'\x08'):
-                if buf:
-                    buf.pop(); sel = 0
+                if cur > 0:
+                    del buf[cur - 1]; cur -= 1; sel = 0
                     text = "".join(buf)
                     if text.startswith("/"):
                         menu_open = True; _redraw_menu(text)
@@ -1736,7 +1780,7 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
             try:    char = ch.decode('utf-8')
             except: continue
             if char < ' ': continue
-            buf.append(char); sel = 0
+            buf.insert(cur, char); cur += 1; sel = 0
             text = "".join(buf)
             if text.startswith("/"):
                 menu_open = True; _redraw_menu(text)
@@ -1746,8 +1790,11 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
                 _redraw(text)
 
     finally:
+        if old_sigwinch is not None:
+            try: signal.signal(signal.SIGWINCH, old_sigwinch)
+            except Exception: pass
         if _ctrlc_timer[0]: _ctrlc_timer[0].cancel()
-        sys.stdout.write("\033[?7h\033[?25h"); sys.stdout.flush()  # restore autowrap
+        sys.stdout.write("\033[?7h\033[?25h"); sys.stdout.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
 
@@ -1991,7 +2038,7 @@ def _pick_dir() -> str | None:
         # path line
         path_s = str(cwd[0]).replace(str(Path.home()), "~")
         out.append(f"\r\033[K  {c(DBLUE+BOLD, path_s)}"
-                   f"  {c(DIM, 'space · select   ↵ · enter dir   esc · cancel')}")
+                   f"  {c(DIM, 'space · open dir   ↵ · select   ⌫ · up   esc · cancel')}")
         out.append(f"\r\033[K{c(DBLUE, '─' * (cols - 1))}")
 
         if not ents:
@@ -2017,8 +2064,10 @@ def _pick_dir() -> str | None:
         _w(f"\033[{H - 1}A\r")
         _fl()
 
+    drawn_h = [0]  # height actually on screen right now
+
     def _erase():
-        H = _H()
+        H = drawn_h[0] or _H()
         for i in range(H):
             _w("\r\033[K")
             if i < H - 1: _w("\n")
@@ -2027,6 +2076,7 @@ def _pick_dir() -> str | None:
 
     def _reserve():
         H = _H()
+        drawn_h[0] = H
         _w("\033[?25l\n" * H)
         _w(f"\033[{H}A\r")
         _fl()
@@ -2054,13 +2104,32 @@ def _pick_dir() -> str | None:
                 elif seq == b'[B':
                     sel[0] = min(len(ents) - 1, sel[0] + 1)
                     _erase(); _reserve(); _render()
+                elif seq == b'[D':  # left arrow → go up
+                    if cwd[0] != cwd[0].parent:
+                        cwd[0] = cwd[0].parent
+                        sel[0] = 0
+                        _erase(); _reserve(); _render()
+                elif seq == b'[C':  # right arrow → enter selected dir
+                    if ents:
+                        name = ents[sel[0]]
+                        if name == "..":
+                            cwd[0] = cwd[0].parent
+                        else:
+                            cwd[0] = cwd[0] / name
+                        sel[0] = 0
+                        _erase(); _reserve(); _render()
                 else:
                     _erase(); _w("\033[?25h"); _fl()
                     return None
                 continue
 
             if ch in (b'\r', b'\n'):
-                # enter dir
+                # select current directory and exit
+                result[0] = str(cwd[0])
+                break
+
+            if ch == b' ':
+                # enter selected dir
                 ents = _entries()
                 if ents:
                     name = ents[sel[0]]
@@ -2072,10 +2141,13 @@ def _pick_dir() -> str | None:
                     _erase(); _reserve(); _render()
                 continue
 
-            if ch == b' ':
-                # select current directory
-                result[0] = str(cwd[0])
-                break
+            if ch in (b'\x7f', b'\x08'):
+                # backspace — go up
+                if cwd[0] != cwd[0].parent:
+                    cwd[0] = cwd[0].parent
+                    sel[0] = 0
+                    _erase(); _reserve(); _render()
+                continue
 
             if ch in (b'\x03', b'\x04'):
                 break
