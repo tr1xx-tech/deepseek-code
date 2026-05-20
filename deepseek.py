@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.60"
+VERSION   = "0.61"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1268,15 +1268,11 @@ def _welcome_lines(cfg, chat_id, chat_title, user_name=""):
     ]
 
 def _show_welcome(cfg, chat_id, chat_title_or_fn, user_name=""):
-    _cls()
-    def _render():
-        title = chat_title_or_fn() if callable(chat_title_or_fn) else chat_title_or_fn
-        return ("\n" +
-                _box(_welcome_lines(cfg, chat_id, title, user_name),
-                     title=f"DeepSeek Code  v{VERSION}") +
-                "\n")
-    _live_state["fn"] = _render
-    print(_render(), end="", flush=True)
+    title = chat_title_or_fn() if callable(chat_title_or_fn) else chat_title_or_fn
+    print("\n" +
+          _box(_welcome_lines(cfg, chat_id, title, user_name),
+               title=f"DeepSeek Code  v{VERSION}") +
+          "\n", end="", flush=True)
 
 def _manual_update():
     """Check for update on demand (/update command)."""
@@ -1925,28 +1921,6 @@ def main():
     ensure_wasm()
     _enter_app()
 
-    # SIGWINCH: redraw welcome box on resize
-    def _sigwinch_handler(sig, frame):
-        if not sys.stdout.isatty():
-            return
-        try:
-            fn = _live_state.get("fn")
-            if fn:
-                cols = _cols()
-                content = fn()
-                lines = content.splitlines()
-                out = [b"\0337\033[?25l"]
-                for i, ln in enumerate(lines):
-                    out.append(f"\033[{i+1};1H\033[K{ln}".encode())
-                out.append(b"\033[?25h\0338")
-                os.write(1, b"".join(out))
-        except Exception:
-            pass
-    try:
-        signal.signal(signal.SIGWINCH, _sigwinch_handler)
-    except (AttributeError, OSError):
-        pass
-
     try:
         if _PENDING_UPDATE:
             _show_update_page(_PENDING_UPDATE)
@@ -2049,7 +2023,6 @@ def main():
                         _welcome()
                     elif chosen:
                         agent._load_chat(chosen["id"], chosen["title"])
-                        _cls()
                         _show_welcome(cfg, agent.chat_id, _wtitle, _wuser())
                         agent.print_history()
                     else:
