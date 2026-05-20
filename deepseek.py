@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.59"
+VERSION   = "0.60"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -781,6 +781,139 @@ def parse_calls(text: str) -> list:
     return calls
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TOOL OUTPUT DISPLAY
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Icons per tool
+_TOOL_ICON = {
+    "bash":       "❯",
+    "python":     "⟩",
+    "read_file":  "○",
+    "write_file": "●",
+    "edit_file":  "◎",
+    "list_dir":   "◈",
+    "web_search": "◎",
+    "web_fetch":  "◎",
+}
+
+def _tool_output_lines(name: str, result: dict) -> list[str]:
+    """Return display lines for a tool result (no ANSI, plain text)."""
+    lines = []
+    if "error" in result:
+        lines.append(f"✗  {result['error'][:300]}")
+    else:
+        out = (result.get("stdout") or result.get("content") or
+               result.get("tree") or "")
+        if out:
+            lines.extend(out.strip().splitlines())
+        ec = result.get("exit_code")
+        if ec is not None:
+            lines.append("exit 0" if ec == 0 else f"exit {ec}")
+        elif result.get("ok"):
+            path = result.get("path","")
+            lines.append(f"ok  {path}" if path else "ok")
+    return lines
+
+
+def _tool_show(name: str, label: str, inp: dict, result: dict):
+    """
+    Print a collapsed one-liner for the tool call.
+    Press ctrl+o to toggle expanded view in-place.
+    """
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        # non-interactive: just print flat
+        _tool_show_flat(name, label, result)
+        return
+    try:
+        import termios, tty as _tty_mod
+    except ImportError:
+        _tool_show_flat(name, label, result)
+        return
+
+    icon    = _TOOL_ICON.get(name, "◆")
+    is_err  = "error" in result
+    ec      = result.get("exit_code")
+    if is_err:
+        status_icon = c(RED, "✗")
+    elif ec is not None and ec != 0:
+        status_icon = c(RED, "✗")
+    else:
+        status_icon = c(GREEN, "✓") if (ec == 0 or result.get("ok") or
+                                         result.get("content") or result.get("tree")) else c(YELLOW, "○")
+
+    out_lines = _tool_output_lines(name, result)
+    cols      = _cols()
+
+    # collapsed line
+    max_lbl   = cols - 30
+    lbl_short = label[:max_lbl] + ("…" if len(label) > max_lbl else "")
+    collapsed = (f"\n  {status_icon} {c(YELLOW, icon)} {bold(name)}"
+                 f"  {dim(lbl_short)}"
+                 f"  {dim('ctrl+o · expand')}")
+
+    # expanded block
+    def _expanded_lines():
+        rows = []
+        rows.append(f"\n  {status_icon} {c(YELLOW, icon)} {bold(name)}  {dim(lbl_short)}"
+                    f"  {dim('ctrl+o · collapse')}")
+        for i, ln in enumerate(out_lines[:120]):
+            rows.append(f"  {dim('│')} {ln}")
+        if len(out_lines) > 120:
+            rows.append(f"  {dim('│')} … +{len(out_lines)-120} lines")
+        return rows
+
+    expanded = False
+
+    def _draw():
+        if expanded:
+            print("\n".join(_expanded_lines()), flush=True)
+        else:
+            print(collapsed, flush=True)
+
+    _draw()
+
+    # Wait for ctrl+o to toggle, any other key to move on
+    import select as _sel
+    fd       = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+    try:
+        _tty_mod.setraw(fd)
+        while True:
+            r, _, _ = _sel.select([fd], [], [], None)
+            if not r:
+                continue
+            ch = os.read(fd, 1)
+            if ch == b'\x0f':  # ctrl+o
+                n_lines = len(_expanded_lines()) if expanded else 1
+                sys.stdout.write(f"\033[{n_lines + 1}A\033[J")
+                sys.stdout.flush()
+                expanded = not expanded
+                _draw()
+            else:
+                break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+
+
+def _tool_show_flat(name: str, label: str, result: dict):
+    icon   = _TOOL_ICON.get(name, "◆")
+    is_err = "error" in result
+    ec     = result.get("exit_code")
+    if is_err:
+        mark = c(RED, "✗")
+    elif ec is not None and ec != 0:
+        mark = c(RED, f"✗ exit {ec}")
+    else:
+        mark = c(GREEN, "✓")
+    print(f"\n  {mark} {c(YELLOW, icon)} {bold(name)}  {dim(label)}", flush=True)
+    out_lines = _tool_output_lines(name, result)
+    for ln in out_lines[:14]:
+        print(f"  {dim('│')} {ln}")
+    if len(out_lines) > 14:
+        print(f"  {dim('│')} … +{len(out_lines)-14} lines")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # AGENT
 # ─────────────────────────────────────────────────────────────────────────────
 class Agent:
@@ -920,29 +1053,13 @@ class Agent:
                 "web_search":f'"{inp.get("query","")[:70]}"',
                 "web_fetch": inp.get("url","")[:80],
                 "python":    inp.get("code","")[:60].replace("\n"," "),
-            }.get(name, "")
-            print(f"\n  {c(YELLOW,'▶')} {bold(name)}  {dim(label)}", flush=True)
+            }.get(name, name)
             try:
                 result = fn(inp, self.cfg)
             except Exception:
                 result = {"error": traceback.format_exc()}
 
-        if "error" in result:
-            print(f"  {c(RED,'✗')} {result['error'][:200]}")
-        else:
-            out = (result.get("stdout") or result.get("content") or
-                   result.get("tree") or "")
-            if out:
-                lines = out.strip().splitlines()
-                for ln in lines[:14]: print(f"  {dim('│')} {ln}")
-                if len(lines) > 14: print(f"  {dim('│')} … +{len(lines)-14} lines")
-            ec = result.get("exit_code")
-            if ec is not None:
-                mark = c(GREEN,"✓") if ec==0 else c(RED,f"✗ exit {ec}")
-                print(f"  {mark}")
-            elif result.get("ok"):
-                print(f"  {c(GREEN,'✓')}")
-
+        _tool_show(name, label if fn else name, inp, result)
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     def turn(self, user_msg: str):
