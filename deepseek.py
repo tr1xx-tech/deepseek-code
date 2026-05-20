@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.65"
+VERSION   = "0.66"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1677,11 +1677,20 @@ def _prompt_with_autocomplete(_unused: str = "") -> str:
         _flush("\033[?7h\033[?25h")
 
     def _on_resize(sig, frame):
-        # Redraw the whole input field at new terminal size
         nonlocal prev_rows
-        prev_rows = [1]
         text = "".join(buf)
-        sys.stdout.write(f"\033[?7l{_bar()}\r\n{PR}{text}\r\n{_bar()}\033[1A\r")
+        # Erase exactly the field we drew: top bar + prev_rows text rows + bottom bar
+        # Cursor is somewhere inside text rows; go all the way up to top bar first.
+        total = prev_rows[0] + 2     # top bar + text rows + bottom bar
+        # worst case: cursor is on first text row, need to go up 1 (to top bar)
+        # use a large upward move clamped by terminal — safe to overshoot
+        sys.stdout.write(f"\033[?7l\033[{total}A\r")
+        for _ in range(total):
+            sys.stdout.write("\033[K\033[1B")
+        sys.stdout.write(f"\033[{total}A\r")
+        sys.stdout.flush()
+        prev_rows[0] = 1
+        sys.stdout.write(f"{_bar()}\r\n{PR}\r\n{_bar()}\033[1A\r")
         sys.stdout.flush()
         _redraw(text)
         _draw_header()
