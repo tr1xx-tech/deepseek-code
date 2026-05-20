@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.62"
+VERSION   = "0.63"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1404,7 +1404,7 @@ _CMDS = [
     ("/new",          "start a new chat"),
     ("/chats",        "browse and switch chats"),
     ("/delete",       "delete current chat"),
-    ("/cwd",          "change working directory"),
+    ("/cwd",          "browse dirs interactively  (or /cwd <path>)"),
     ("/login",        "re-authenticate"),
     ("/search",       "toggle web search on/off"),
     ("/confirm",      "toggle shell confirmation"),
@@ -1938,6 +1938,219 @@ def _pick_chat(agent) -> dict | None:
         _w()("\033[?25h"); _flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
 
+def _pick_dir() -> str | None:
+    """
+    Interactive directory browser / path input.
+    Returns the chosen absolute path, or None if cancelled.
+    Shows entries for the path typed so far; arrows + enter to navigate.
+    """
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return None
+    try:
+        import termios, tty as _tty_mod
+    except ImportError:
+        return None
+
+    fd       = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+
+    SHOW  = 10          # max entries shown at once
+    BLK   = "\033[48;5;235m"   # subtle bg for selected row
+    RST   = "\033[0m"
+
+    def _w(s): sys.stdout.write(s)
+    def _flush(): sys.stdout.flush()
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+    def _list(base: str, prefix: str):
+        """Return sorted (name, is_dir) pairs under base matching prefix."""
+        try:
+            p = Path(base)
+            if not p.is_dir():
+                return []
+            entries = []
+            for e in sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
+                if e.name.startswith(prefix) or prefix == "":
+                    entries.append((e.name, e.is_dir()))
+            return entries
+        except PermissionError:
+            return []
+
+    def _split(typed: str):
+        """Split typed path into (base_dir, partial_name)."""
+        p = typed.replace("~", str(Path.home()))
+        if typed.endswith("/") or typed == "":
+            return p.rstrip("/") or "/", ""
+        parent = str(Path(p).parent) if "/" in p else "."
+        name   = Path(p).name
+        return parent, name
+
+    def _H(n): return min(n, SHOW) + 3   # header + entries + footer
+
+    buf  = [os.getcwd()]   # current typed path
+    sel  = [0]
+
+    def _entries():
+        base, pfx = _split("".join(buf))
+        return _list(base, pfx)
+
+    def _render():
+        typed   = "".join(buf)
+        entries = _entries()
+        n       = min(len(entries), SHOW)
+        H       = n + 3
+        cols    = _cols()
+
+        out = []
+        # header row: typed path + hint
+        hint = c(DIM, "↑↓ · navigate   ↵ · open   esc · cancel")
+        path_disp = c("\033[38;5;75m", typed)
+        out.append(f"\r\033[K  {path_disp}")
+        # separator
+        out.append(f"\r\033[K{c(DBLUE, '─' * (cols - 1))}")
+        # entries
+        if not entries:
+            out.append(f"\r\033[K  {c(DIM, '(empty)')}")
+            n = 1
+        else:
+            start = max(0, sel[0] - SHOW + 1) if sel[0] >= SHOW else 0
+            for i in range(start, start + min(SHOW, len(entries))):
+                name, is_dir = entries[i]
+                icon  = c(DBLUE, "◈ ") if is_dir else c(DIM, "  ")
+                label = (name + "/") if is_dir else name
+                label = label[:cols - 6]
+                if i == sel[0]:
+                    row = f" {BLK}{c('\033[38;5;75m', f'❯ {icon}{label}')}{RST}"
+                else:
+                    row = f"   {icon}{c(DIM, label)}"
+                row += " " * max(0, cols - _vis_len(row) - 1)
+                out.append(f"\r\033[K{row}")
+        # footer
+        out.append(f"\r\033[K{c(DBLUE, '─' * (cols - 1))}")
+        out.append(f"\r\033[K{hint}")
+        H = n + 4
+
+        _w("\n".join(out))
+        _w(f"\033[{H - 1}A\r")
+        _flush()
+
+    def _erase():
+        entries = _entries()
+        n = min(len(entries), SHOW) if entries else 1
+        H = n + 4
+        for i in range(H):
+            _w("\r\033[K")
+            if i < H - 1: _w("\n")
+        _w(f"\033[{H - 1}A\r\033[K")
+        _flush()
+
+    def _reserve():
+        entries = _entries()
+        n = min(len(entries), SHOW) if entries else 1
+        H = n + 4
+        _w("\033[?25l")
+        _w("\n" * H)
+        _w(f"\033[{H}A\r")
+        _flush()
+
+    _reserve()
+    _render()
+
+    result = [None]
+    try:
+        _tty_mod.setraw(fd)
+        while True:
+            ch = os.read(fd, 1)
+
+            if ch == b'\x1b':
+                try:
+                    os.set_blocking(fd, False)
+                    seq = os.read(fd, 2)
+                    os.set_blocking(fd, True)
+                except:
+                    seq = b''
+                entries = _entries()
+                if seq == b'[A':   sel[0] = max(0, sel[0] - 1)
+                elif seq == b'[B': sel[0] = min(max(0, len(entries) - 1), sel[0] + 1)
+                else:
+                    # esc — cancel
+                    _erase()
+                    _w("\033[?25h"); _flush()
+                    return None
+                _erase(); _reserve(); _render()
+                continue
+
+            if ch in (b'\r', b'\n'):
+                entries = _entries()
+                if entries and sel[0] < len(entries):
+                    name, is_dir = entries[sel[0]]
+                    typed  = "".join(buf)
+                    base, _pfx = _split(typed)
+                    chosen = str(Path(base) / name)
+                    if is_dir:
+                        # navigate into dir
+                        buf[:] = list(chosen + "/")
+                        sel[0] = 0
+                        _erase(); _reserve(); _render()
+                        continue
+                    else:
+                        # select file path (cd to its parent)
+                        result[0] = str(Path(chosen).parent)
+                else:
+                    # enter on empty — confirm typed path
+                    typed = "".join(buf).rstrip("/") or "/"
+                    typed = typed.replace("~", str(Path.home()))
+                    result[0] = typed
+                break
+
+            if ch in (b'\x7f', b'\x08'):
+                if buf:
+                    buf.pop()
+                    sel[0] = 0
+                    _erase(); _reserve(); _render()
+                continue
+
+            if ch == b'\x03':
+                result[0] = None
+                break
+
+            if ch == b'\t':
+                # tab-complete: fill in selected entry
+                entries = _entries()
+                if entries and sel[0] < len(entries):
+                    name, is_dir = entries[sel[0]]
+                    typed  = "".join(buf)
+                    base, _pfx = _split(typed)
+                    completed = str(Path(base) / name)
+                    if is_dir: completed += "/"
+                    buf[:] = list(completed)
+                    sel[0] = 0
+                    _erase(); _reserve(); _render()
+                continue
+
+            # printable character
+            b0 = ch[0]
+            if b0 >= 0xF0:   extra = 3
+            elif b0 >= 0xE0: extra = 2
+            elif b0 >= 0xC0: extra = 1
+            else:            extra = 0
+            for _ in range(extra):
+                try: ch += os.read(fd, 1)
+                except: break
+            try:    char = ch.decode("utf-8")
+            except: continue
+            if char < " ": continue
+            buf.append(char)
+            sel[0] = 0
+            _erase(); _reserve(); _render()
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+        _w("\033[?25h"); _flush()
+
+    return result[0]
+
+
 def _delete_current_chat(agent, cfg):
     title = agent.chat_title or "Untitled"
     try:
@@ -2125,11 +2338,22 @@ def main():
                             os.chdir(arg)
                             cwd = os.getcwd().replace(str(Path.home()), "~")
                             print(f"  {c(BLUE+DIM,'directory')}  {c(DIM, cwd)}")
+                            _update_header(cwd=cwd)
                         except Exception as e:
                             print(c(RED, f"  {e}"))
                     else:
-                        cwd = os.getcwd().replace(str(Path.home()), "~")
-                        print(f"  {c(BLUE+DIM,'directory')}  {c(DIM, cwd)}")
+                        chosen = _pick_dir()
+                        if chosen:
+                            try:
+                                os.chdir(chosen)
+                                cwd = os.getcwd().replace(str(Path.home()), "~")
+                                print(f"  {c(BLUE+DIM,'directory')}  {c(DIM, cwd)}")
+                                _update_header(cwd=cwd)
+                            except Exception as e:
+                                print(c(RED, f"  {e}"))
+                        else:
+                            cwd = os.getcwd().replace(str(Path.home()), "~")
+                            print(f"  {c(BLUE+DIM,'directory')}  {c(DIM, cwd)}")
 
                 else:
                     print(c(YELLOW, "  unknown command — /help"))
