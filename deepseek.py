@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.63"
+VERSION   = "0.64"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1940,9 +1940,9 @@ def _pick_chat(agent) -> dict | None:
 
 def _pick_dir() -> str | None:
     """
-    Interactive directory browser / path input.
-    Returns the chosen absolute path, or None if cancelled.
-    Shows entries for the path typed so far; arrows + enter to navigate.
+    Interactive directory browser.
+    ↑↓ navigate · Enter = enter dir · Space = select current dir · Esc = cancel
+    Returns chosen absolute path or None.
     """
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         return None
@@ -1953,105 +1953,83 @@ def _pick_dir() -> str | None:
 
     fd       = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
-
-    SHOW  = 10          # max entries shown at once
-    BLK   = "\033[48;5;235m"   # subtle bg for selected row
-    RST   = "\033[0m"
+    SHOW     = 12
 
     def _w(s): sys.stdout.write(s)
-    def _flush(): sys.stdout.flush()
+    def _fl():  sys.stdout.flush()
 
-    # ── helpers ───────────────────────────────────────────────────────────────
-    def _list(base: str, prefix: str):
-        """Return sorted (name, is_dir) pairs under base matching prefix."""
+    def _dirs(path: Path) -> list:
+        """Sorted list of subdirectory names under path."""
         try:
-            p = Path(base)
-            if not p.is_dir():
-                return []
-            entries = []
-            for e in sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
-                if e.name.startswith(prefix) or prefix == "":
-                    entries.append((e.name, e.is_dir()))
-            return entries
+            return sorted(
+                [e.name for e in path.iterdir() if e.is_dir() and not e.name.startswith(".")],
+                key=str.lower
+            )
         except PermissionError:
             return []
 
-    def _split(typed: str):
-        """Split typed path into (base_dir, partial_name)."""
-        p = typed.replace("~", str(Path.home()))
-        if typed.endswith("/") or typed == "":
-            return p.rstrip("/") or "/", ""
-        parent = str(Path(p).parent) if "/" in p else "."
-        name   = Path(p).name
-        return parent, name
-
-    def _H(n): return min(n, SHOW) + 3   # header + entries + footer
-
-    buf  = [os.getcwd()]   # current typed path
-    sel  = [0]
+    cwd   = [Path(os.getcwd()).resolve()]
+    sel   = [0]
 
     def _entries():
-        base, pfx = _split("".join(buf))
-        return _list(base, pfx)
+        names = _dirs(cwd[0])
+        # prepend ".." unless already at root
+        if cwd[0] != cwd[0].parent:
+            return [".."] + names
+        return names
+
+    def _H():
+        n = min(len(_entries()) or 1, SHOW)
+        return n + 3   # path line + sep + entries + sep
 
     def _render():
-        typed   = "".join(buf)
-        entries = _entries()
-        n       = min(len(entries), SHOW)
-        H       = n + 3
-        cols    = _cols()
+        cols = _cols()
+        ents = _entries()
+        n    = min(len(ents) or 1, SHOW)
+        out  = []
 
-        out = []
-        # header row: typed path + hint
-        hint = c(DIM, "↑↓ · navigate   ↵ · open   esc · cancel")
-        path_disp = c("\033[38;5;75m", typed)
-        out.append(f"\r\033[K  {path_disp}")
-        # separator
+        # path line
+        path_s = str(cwd[0]).replace(str(Path.home()), "~")
+        out.append(f"\r\033[K  {c(DBLUE+BOLD, path_s)}"
+                   f"  {c(DIM, 'space · select   ↵ · enter dir   esc · cancel')}")
         out.append(f"\r\033[K{c(DBLUE, '─' * (cols - 1))}")
-        # entries
-        if not entries:
+
+        if not ents:
             out.append(f"\r\033[K  {c(DIM, '(empty)')}")
-            n = 1
         else:
             start = max(0, sel[0] - SHOW + 1) if sel[0] >= SHOW else 0
-            for i in range(start, start + min(SHOW, len(entries))):
-                name, is_dir = entries[i]
-                icon  = c(DBLUE, "◈ ") if is_dir else c(DIM, "  ")
-                label = (name + "/") if is_dir else name
-                label = label[:cols - 6]
+            for i in range(start, start + min(SHOW, len(ents))):
+                name    = ents[i]
+                is_up   = name == ".."
+                icon    = c(DIM, "↑ ") if is_up else c(DBLUE, "◈ ")
+                label   = (name)[:cols - 8]
                 if i == sel[0]:
-                    row = f" {BLK}{c('\033[38;5;75m', f'❯ {icon}{label}')}{RST}"
+                    row = f"  {c(BBLUE+BOLD, '❯')} {icon}{c('\033[38;5;75m', label)}"
                 else:
-                    row = f"   {icon}{c(DIM, label)}"
+                    row = f"    {icon}{c(DIM, label)}"
                 row += " " * max(0, cols - _vis_len(row) - 1)
                 out.append(f"\r\033[K{row}")
-        # footer
-        out.append(f"\r\033[K{c(DBLUE, '─' * (cols - 1))}")
-        out.append(f"\r\033[K{hint}")
-        H = n + 4
 
+        out.append(f"\r\033[K{c(DBLUE, '─' * (cols - 1))}")
+
+        H = n + 3
         _w("\n".join(out))
         _w(f"\033[{H - 1}A\r")
-        _flush()
+        _fl()
 
     def _erase():
-        entries = _entries()
-        n = min(len(entries), SHOW) if entries else 1
-        H = n + 4
+        H = _H()
         for i in range(H):
             _w("\r\033[K")
             if i < H - 1: _w("\n")
         _w(f"\033[{H - 1}A\r\033[K")
-        _flush()
+        _fl()
 
     def _reserve():
-        entries = _entries()
-        n = min(len(entries), SHOW) if entries else 1
-        H = n + 4
-        _w("\033[?25l")
-        _w("\n" * H)
+        H = _H()
+        _w("\033[?25l\n" * H)
         _w(f"\033[{H}A\r")
-        _flush()
+        _fl()
 
     _reserve()
     _render()
@@ -2069,84 +2047,42 @@ def _pick_dir() -> str | None:
                     os.set_blocking(fd, True)
                 except:
                     seq = b''
-                entries = _entries()
-                if seq == b'[A':   sel[0] = max(0, sel[0] - 1)
-                elif seq == b'[B': sel[0] = min(max(0, len(entries) - 1), sel[0] + 1)
+                ents = _entries()
+                if seq == b'[A':
+                    sel[0] = max(0, sel[0] - 1)
+                    _erase(); _reserve(); _render()
+                elif seq == b'[B':
+                    sel[0] = min(len(ents) - 1, sel[0] + 1)
+                    _erase(); _reserve(); _render()
                 else:
-                    # esc — cancel
-                    _erase()
-                    _w("\033[?25h"); _flush()
+                    _erase(); _w("\033[?25h"); _fl()
                     return None
-                _erase(); _reserve(); _render()
                 continue
 
             if ch in (b'\r', b'\n'):
-                entries = _entries()
-                if entries and sel[0] < len(entries):
-                    name, is_dir = entries[sel[0]]
-                    typed  = "".join(buf)
-                    base, _pfx = _split(typed)
-                    chosen = str(Path(base) / name)
-                    if is_dir:
-                        # navigate into dir
-                        buf[:] = list(chosen + "/")
-                        sel[0] = 0
-                        _erase(); _reserve(); _render()
-                        continue
+                # enter dir
+                ents = _entries()
+                if ents:
+                    name = ents[sel[0]]
+                    if name == "..":
+                        cwd[0] = cwd[0].parent
                     else:
-                        # select file path (cd to its parent)
-                        result[0] = str(Path(chosen).parent)
-                else:
-                    # enter on empty — confirm typed path
-                    typed = "".join(buf).rstrip("/") or "/"
-                    typed = typed.replace("~", str(Path.home()))
-                    result[0] = typed
-                break
-
-            if ch in (b'\x7f', b'\x08'):
-                if buf:
-                    buf.pop()
+                        cwd[0] = cwd[0] / name
                     sel[0] = 0
                     _erase(); _reserve(); _render()
                 continue
 
-            if ch == b'\x03':
-                result[0] = None
+            if ch == b' ':
+                # select current directory
+                result[0] = str(cwd[0])
                 break
 
-            if ch == b'\t':
-                # tab-complete: fill in selected entry
-                entries = _entries()
-                if entries and sel[0] < len(entries):
-                    name, is_dir = entries[sel[0]]
-                    typed  = "".join(buf)
-                    base, _pfx = _split(typed)
-                    completed = str(Path(base) / name)
-                    if is_dir: completed += "/"
-                    buf[:] = list(completed)
-                    sel[0] = 0
-                    _erase(); _reserve(); _render()
-                continue
-
-            # printable character
-            b0 = ch[0]
-            if b0 >= 0xF0:   extra = 3
-            elif b0 >= 0xE0: extra = 2
-            elif b0 >= 0xC0: extra = 1
-            else:            extra = 0
-            for _ in range(extra):
-                try: ch += os.read(fd, 1)
-                except: break
-            try:    char = ch.decode("utf-8")
-            except: continue
-            if char < " ": continue
-            buf.append(char)
-            sel[0] = 0
-            _erase(); _reserve(); _render()
+            if ch in (b'\x03', b'\x04'):
+                break
 
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
-        _w("\033[?25h"); _flush()
+        _erase(); _w("\033[?25h"); _fl()
 
     return result[0]
 
@@ -2190,47 +2126,73 @@ def main():
             _show_update_page(_PENDING_UPDATE)
 
         _cls()
+        _update_header(title="New chat",
+                       model=_MNAMES.get(cfg["model"], cfg["model"]),
+                       cwd=os.getcwd())
         _draw_header()
-        print()
 
-        _running = [True]
-        def _spin():
-            frames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
-            i = 0
-            while _running[0]:
-                sys.stdout.write(f"\r  {c(BCYAN, frames[i % 10])}  {c(DIM, 'connecting...')}")
-                sys.stdout.flush()
-                time.sleep(0.08)
-                i += 1
-            sys.stdout.write("\r" + " " * 30 + "\r")
-            sys.stdout.flush()
+        # ── create agent in background; show welcome immediately ──────────────
+        agent_box  = [None]   # filled by bg thread
+        agent_err  = [None]   # Exception if init failed
+        agent_done = threading.Event()
 
-        spin_t = threading.Thread(target=_spin, daemon=True)
-        spin_t.start()
+        def _init_agent():
+            try:
+                agent_box[0] = Agent(cfg)
+            except Exception as e:
+                agent_err[0] = e
+            finally:
+                agent_done.set()
 
-        try:
-            agent = Agent(cfg)
-        except AuthError:
-            _running[0] = False; spin_t.join(timeout=1)
-            cfg["auth_token"] = ""; save_cfg(cfg)
-            _cls(); _draw_header()
-            print()
+        threading.Thread(target=_init_agent, daemon=True).start()
+
+        # Show welcome box immediately (agent_box[0] still None — that's fine)
+        _show_welcome(cfg, "new", lambda: "New chat", "")
+
+        # Wait for agent with error page loop
+        while True:
+            agent_done.wait()
+            if agent_box[0] is not None:
+                agent = agent_box[0]
+                break
+            # error — show page with restart button
+            err = agent_err[0]
+            is_auth = isinstance(err, AuthError)
+            _cls(); _draw_header(); print()
             print(_box([
                 "",
-                f"  {c(RED+BOLD, '✗')}  {bold('Token invalid — please log in again')}",
+                f"  {c(RED+BOLD, '✗')}  {bold('AuthError — token invalid' if is_auth else str(err)[:120])}",
+                "",
+                f"  {c(DIM, 'r · restart   q · quit')}",
                 "",
             ], title="DeepSeek Code"))
             print()
-            do_login(cfg)
-            if not cfg["auth_token"]: raise SystemExit("Login failed.")
-            _cls(); _draw_header(); print()
-            _running[0] = True
-            spin_t = threading.Thread(target=_spin, daemon=True)
-            spin_t.start()
-            agent = Agent(cfg)
-
-        _running[0] = False
-        spin_t.join(timeout=1)
+            ch = None
+            if _tty():
+                try:
+                    import termios, tty as _tty_mod
+                    fd2 = sys.stdin.fileno()
+                    old2 = termios.tcgetattr(fd2)
+                    _tty_mod.setraw(fd2)
+                    ch = os.read(fd2, 1)
+                    termios.tcsetattr(fd2, termios.TCSADRAIN, old2)
+                except Exception:
+                    pass
+            if ch == b'q':
+                raise SystemExit(0)
+            # restart: re-login if auth error, then retry
+            if is_auth:
+                cfg["auth_token"] = ""; save_cfg(cfg)
+                _cls(); _draw_header(); print()
+                do_login(cfg)
+                if not cfg["auth_token"]:
+                    raise SystemExit("Login failed.")
+            agent_box[0] = None
+            agent_err[0] = None
+            agent_done.clear()
+            threading.Thread(target=_init_agent, daemon=True).start()
+            _cls(); _draw_header()
+            _show_welcome(cfg, "new", lambda: "New chat", "")
 
         def _wtitle(): return agent.chat_title
         def _wuser():  return getattr(agent, "user_name", "")
@@ -2244,7 +2206,8 @@ def main():
             _draw_header()
             _show_welcome(cfg, agent.chat_id, _wtitle, _wuser())
 
-        _welcome()
+        # refresh welcome now that agent is ready
+        _cls(); _welcome()
 
         def toggle(key, arg):
             cfg[key] = arg=="on" if arg in ("on","off") else not cfg[key]
