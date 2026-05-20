@@ -51,7 +51,7 @@ WASM_URL = ("https://raw.githubusercontent.com/tr1xx-tech/deepseek-code"
             "/main/sha3.wasm")
 API_BASE = "https://chat.deepseek.com/api/v0"
 
-VERSION   = "0.61"
+VERSION   = "0.62"
 _RAW_BASE = "https://raw.githubusercontent.com/tr1xx-tech/deepseek-code/main"
 
 _PENDING_UPDATE = None
@@ -1013,6 +1013,7 @@ class Agent:
                     elif kind == "title":
                         self.chat_title = content
                         _update_chat_title(self.chat_id, content)
+                        _update_header(title=content)
                     if chunk.get("finish_reason") == "stop":
                         mid = chunk.get("message_id")
                         if mid: self.parent_id = mid
@@ -1067,6 +1068,7 @@ class Agent:
         if self._first_turn:
             self.chat_title  = user_msg[:50].replace('\n', ' ')
             _track_chat(self.chat_id, self.chat_title, self.cfg["model"])
+            _update_header(title=self.chat_title)
             prompt = (SYSTEM_PROMPT.replace("{cwd}", os.getcwd()).replace("{platform}", sys.platform)
                       + "\n\n---\nUser: " + user_msg)
             self._first_turn = False
@@ -1180,11 +1182,60 @@ def _tty():  return sys.stdout.isatty()
 def _cols(): return shutil.get_terminal_size((80, 24)).columns
 def _rows(): return shutil.get_terminal_size((80, 24)).lines
 
+_header_state: dict = {"title": "New chat", "model": "", "cwd": ""}
+
+def _draw_header():
+    """Redraw the 1-line sticky header at row 1 without moving the cursor."""
+    if not _tty(): return
+    cols  = _cols()
+    title = _header_state["title"]
+    model = _header_state["model"]
+    cwd   = _header_state["cwd"] or os.getcwd()
+
+    BG   = "\033[48;5;17m"   # dark navy background
+    FG   = "\033[38;5;153m"  # light blue text
+    DIM2 = "\033[38;5;67m"   # muted blue for separators / secondary
+    RST  = "\033[0m"
+
+    sep   = f"  {DIM2}│{RST}{BG}  "
+    left  = f"{BG}{FG} {title}{RST}{BG}{sep}{DIM2}{model}{RST}{BG}{sep}{DIM2}{cwd}"
+    plain = f" {title}  │  {model}  │  {cwd}"
+    pad   = max(0, cols - len(plain))
+    line  = f"{BG}{FG} {title}{RST}{BG}{sep}{DIM2}{model}{RST}{BG}{sep}{DIM2}{cwd}{' ' * pad}{RST}"
+
+    sys.stdout.write(
+        "\0337"           # save cursor + attrs
+        "\033[1;1H"       # move to row 1 col 1
+        "\033[K"          # clear line
+        + line +
+        "\0338"           # restore cursor
+    )
+    sys.stdout.flush()
+
+def _update_header(title=None, model=None, cwd=None):
+    if title is not None: _header_state["title"] = title
+    if model is not None: _header_state["model"] = model
+    if cwd   is not None: _header_state["cwd"]   = cwd
+    _draw_header()
+
 def _enter_app():
-    if _tty(): sys.stdout.write("\033[?1049h\033[H"); sys.stdout.flush()
+    if not _tty(): return
+    rows = _rows()
+    sys.stdout.write(
+        "\033[?1049h"       # alternate screen
+        "\033[H"            # cursor home
+        f"\033[2;{rows}r"   # scroll region: row 2..rows (row 1 = header)
+        "\033[2;1H"         # cursor to row 2
+    )
+    sys.stdout.flush()
 
 def _exit_app():
-    if _tty(): sys.stdout.write("\033[?1049l"); sys.stdout.flush()
+    if not _tty(): return
+    sys.stdout.write(
+        "\033[r"            # reset scroll region
+        "\033[?1049l"       # leave alternate screen
+    )
+    sys.stdout.flush()
 
 def _cls():
     if _tty(): sys.stdout.write("\033[2J\033[H"); sys.stdout.flush()
@@ -1926,6 +1977,7 @@ def main():
             _show_update_page(_PENDING_UPDATE)
 
         _cls()
+        _draw_header()
         print()
 
         _running = [True]
@@ -1948,7 +2000,7 @@ def main():
         except AuthError:
             _running[0] = False; spin_t.join(timeout=1)
             cfg["auth_token"] = ""; save_cfg(cfg)
-            _cls()
+            _cls(); _draw_header()
             print()
             print(_box([
                 "",
@@ -1958,7 +2010,7 @@ def main():
             print()
             do_login(cfg)
             if not cfg["auth_token"]: raise SystemExit("Login failed.")
-            _cls(); print()
+            _cls(); _draw_header(); print()
             _running[0] = True
             spin_t = threading.Thread(target=_spin, daemon=True)
             spin_t.start()
@@ -1971,6 +2023,12 @@ def main():
         def _wuser():  return getattr(agent, "user_name", "")
 
         def _welcome():
+            _update_header(
+                title=agent.chat_title,
+                model=_MNAMES.get(cfg["model"], cfg["model"]),
+                cwd=os.getcwd(),
+            )
+            _draw_header()
             _show_welcome(cfg, agent.chat_id, _wtitle, _wuser())
 
         _welcome()
@@ -2004,11 +2062,11 @@ def main():
                     print()
 
                 elif cmd == "help":
-                    _cls(); print(); print(_help_box()); print()
+                    _cls(); _draw_header(); print(); print(_help_box()); print()
                     continue
 
                 elif cmd == "status":
-                    _cls(); print(); print(_status_box(cfg, agent.chat_id, agent.chat_title)); print()
+                    _cls(); _draw_header(); print(); print(_status_box(cfg, agent.chat_id, agent.chat_title)); print()
                     continue
 
                 elif cmd in ("new", "clear"):
@@ -2023,7 +2081,7 @@ def main():
                         _welcome()
                     elif chosen:
                         agent._load_chat(chosen["id"], chosen["title"])
-                        _show_welcome(cfg, agent.chat_id, _wtitle, _wuser())
+                        _welcome()
                         agent.print_history()
                     else:
                         print()
@@ -2042,12 +2100,14 @@ def main():
                         cfg["model"] = arg; save_cfg(cfg)
                         mn = next(n for k,n,_ in _MODELS if k==arg)
                         print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
+                        _update_header(model=mn)
                     else:
                         chosen = _pick_model(cfg["model"])
                         if chosen:
                             cfg["model"] = chosen; save_cfg(cfg)
                             mn = next(n for k,n,_ in _MODELS if k==chosen)
                             print(f"  {c(GREEN+BOLD,'✓')}  {c(BCYAN+BOLD, mn)}")
+                            _update_header(model=mn)
                         else:
                             print(f"  {c(DIM, _MNAMES.get(cfg['model'], cfg['model']))}")
 
